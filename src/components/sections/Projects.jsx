@@ -11,7 +11,6 @@ export const colorOptions = [
   { label: 'Amber', value: 'from-amber-500 to-yellow-400' },
 ]
 
-// ── Rotaract 5 Avenues ────────────────────────────────────────────────────────
 export const rotaractAvenues = [
   'Club Service',
   'Community Service',
@@ -20,7 +19,6 @@ export const rotaractAvenues = [
   'Public Image',
 ]
 
-// ── Rotary 7 Areas of Focus ───────────────────────────────────────────────────
 export const areasOfFocus = [
   'Peacebuilding and Conflict Prevention',
   'Disease Prevention and Treatment',
@@ -31,28 +29,23 @@ export const areasOfFocus = [
   'Supporting the Environment',
 ]
 
-// Combined for backward-compat filters
 export const projectCategories = [...rotaractAvenues, ...areasOfFocus]
 
-export const impactLabels = {
-  volunteerHours: 'Volunteer Hours',
-  fundsRaised: 'Funds Raised (₹)',
-  contributions: 'Contributions Received (₹)',
-  peopleImpacted: 'People Impacted',
-  membersEngaged: 'Members Engaged',
-}
-
-export const emptyImpact = {
-  volunteerHours: 0, fundsRaised: 0, contributions: 0,
-  peopleImpacted: 0, projectsCompleted: 0, membersEngaged: 0,
-}
-
 export const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
+
+// ── Impact fields aligned to AllProjects flat fields ──────────────────────────
+const IMPACT_FIELDS = [
+  { key: 'participants',        label: 'Participants'           },
+  { key: 'beneficiaries',       label: 'Beneficiaries'         },
+  { key: 'volunteers',          label: 'Volunteers'            },
+  { key: 'volunteerHours',      label: 'Volunteer Hours'       },
+  { key: 'cashContributions',   label: 'Cash Contributions'    },
+  { key: 'inKindContributions', label: 'In-Kind Contributions' },
+]
 
 // ── Project Modal ─────────────────────────────────────────────────────────────
 export function ProjectModal({ project, onClose }) {
   if (!project) return null
-  const impact = project.impact || emptyImpact
 
   return (
     <motion.div className="fixed inset-0 z-[200] flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -81,8 +74,12 @@ export function ProjectModal({ project, onClose }) {
             </svg>
           </button>
           <div className="absolute bottom-4 left-6 right-6">
-            {/* Avenue + Area of Focus badges */}
             <div className="flex flex-wrap gap-2 mb-2">
+              {project.activityType && (
+                <span className="inline-block px-3 py-1 text-xs font-semibold bg-black/30 backdrop-blur-sm rounded-full text-white">
+                  {project.activityType}
+                </span>
+              )}
               {project.avenue && (
                 <span className="inline-block px-3 py-1 text-xs font-semibold bg-white/20 backdrop-blur-sm rounded-full text-white">
                   {project.avenue}
@@ -93,7 +90,6 @@ export function ProjectModal({ project, onClose }) {
                   {project.areaOfFocus}
                 </span>
               )}
-              {/* Fallback: show category if no avenue */}
               {!project.avenue && project.category && (
                 <span className="inline-block px-3 py-1 text-xs font-semibold bg-white/20 backdrop-blur-sm rounded-full text-white">
                   {project.category}
@@ -107,7 +103,7 @@ export function ProjectModal({ project, onClose }) {
         <div className="p-6">
           <p className="text-rotary-charcoal dark:text-white/70 mb-4 leading-relaxed">{project.description}</p>
 
-          {/* Avenue + Area of Focus detail pills */}
+          {/* Avenue + Area of Focus pills */}
           {(project.avenue || project.areaOfFocus) && (
             <div className="flex flex-wrap gap-3 mb-5">
               {project.avenue && (
@@ -135,6 +131,17 @@ export function ProjectModal({ project, onClose }) {
             </div>
           )}
 
+          {/* Venue */}
+          {project.venue && (
+            <div className="flex items-center gap-2 mb-4 text-sm text-rotary-slate dark:text-white/40">
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              {project.venue}
+            </div>
+          )}
+
           {/* Dates */}
           {(project.startDate || project.endDate) && (
             <div className="flex items-center gap-2 mb-6 text-sm text-rotary-slate dark:text-white/40">
@@ -147,12 +154,37 @@ export function ProjectModal({ project, onClose }) {
             </div>
           )}
 
-          {/* Impact Metrics */}
+          {/* Partners */}
+          {(project.hostClub || project.partnerClubs || project.externalPartners) && (
+            <div className="mb-6 p-4 rounded-lg bg-gray-50 dark:bg-white/[0.03] border border-gray-100 dark:border-white/5 space-y-1.5">
+              {project.hostClub && (
+                <p className="text-xs text-rotary-slate dark:text-white/40">
+                  <span className="font-semibold text-rotary-charcoal dark:text-white/70">Host Club: </span>{project.hostClub}
+                </p>
+              )}
+              {project.partnerClubs && (
+                <p className="text-xs text-rotary-slate dark:text-white/40">
+                  <span className="font-semibold text-rotary-charcoal dark:text-white/70">Partner Clubs: </span>{project.partnerClubs}
+                </p>
+              )}
+              {project.externalPartners && (
+                <p className="text-xs text-rotary-slate dark:text-white/40">
+                  <span className="font-semibold text-rotary-charcoal dark:text-white/70">External Partners: </span>{project.externalPartners}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Impact Metrics — flat fields matching AllProjects */}
           <h3 className="font-display font-semibold text-sm uppercase tracking-wider text-rotary-slate dark:text-white/40 mb-4">Impact Metrics</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {Object.entries(impactLabels).map(([key, label]) => (
+            {IMPACT_FIELDS.map(({ key, label }) => (
               <div key={key} className="p-3 rounded-lg bg-gray-50 dark:bg-white/[0.03] border border-gray-100 dark:border-white/5 text-center">
-                <p className="text-xl font-display font-bold text-rotary-blue">{(impact[key] || 0).toLocaleString()}</p>
+                <p className="text-xl font-display font-bold text-rotary-blue">
+                  {key === 'cashContributions' || key === 'inKindContributions'
+                    ? `₹${(project[key] || 0).toLocaleString()}`
+                    : (project[key] || 0).toLocaleString()}
+                </p>
                 <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">{label}</p>
               </div>
             ))}
@@ -168,9 +200,7 @@ export default function Projects({ onViewAll, onViewArchives }) {
   const { data: projects, loading } = useCollection('projects')
   const [selectedProject, setSelectedProject] = useState(null)
 
-  const featured = projects
-    .filter(p => p.featured)
-    .slice(0, 4)
+  const featured = projects.filter(p => p.featured).slice(0, 4)
 
   if (loading) return (
     <section id="projects" className="section-padding">
@@ -217,8 +247,12 @@ export default function Projects({ onViewAll, onViewArchives }) {
               <div className={`absolute inset-0 bg-gradient-to-t ${project.color} opacity-50 group-hover:opacity-60 transition-opacity`} />
               <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
               <div className="absolute inset-0 p-6 md:p-8 flex flex-col justify-end">
-                {/* Show avenue + area of focus or fallback category */}
                 <div className="flex flex-wrap gap-1.5 mb-3">
+                  {project.activityType && (
+                    <span className="inline-block px-2.5 py-1 text-xs font-semibold bg-black/30 backdrop-blur-sm rounded-full text-white">
+                      {project.activityType}
+                    </span>
+                  )}
                   {project.avenue && (
                     <span className="inline-block px-2.5 py-1 text-xs font-semibold bg-white/20 backdrop-blur-sm rounded-full text-white">
                       {project.avenue}
@@ -278,12 +312,7 @@ export default function Projects({ onViewAll, onViewArchives }) {
           >
             Archives
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17 8l4 4m0 0l-4 4m4-4H3"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
             </svg>
           </motion.button>
         </motion.div>
