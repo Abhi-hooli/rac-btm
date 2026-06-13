@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import AdminLogin from "./components/ui/AdminLogin";
 import UserManagement from "./components/sections/UserManagement";
 
+const Blog = lazy(() => import('./components/sections/Blog'))
 const Hero = lazy(() => import('./components/sections/Hero'))
 const About = lazy(() => import('./components/sections/About'))
 const Impact = lazy(() => import('./components/sections/Impact'))
@@ -27,6 +28,7 @@ const ClubDocuments = lazy(() => import('./components/sections/ClubDocuments'))
 const ContactPage = lazy(() => import('./components/sections/ContactPage'))
 const EventRsvpAdmin = lazy(() => import('./components/sections/EventRsvpAdmin'))
 const ArchivesPage = lazy(() => import('./components/sections/ArchivesPage'))
+const NewsletterGenerator = lazy(() => import('./components/sections/NewsletterGenerator'))
 
 
 const SectionLoader = () => (
@@ -67,7 +69,9 @@ export default function App() {
         '/analytics': 'analytics',
         '/documents': 'documents',
         '/contact': 'contact',
-        '/users': 'users'
+        '/users': 'users',
+        '/blog': 'blog',
+        '/newsletter': 'newsletter',
       }
       const page = pathMap[path]
       if (page) setCurrentPage(page)
@@ -93,7 +97,10 @@ export default function App() {
       analytics: '/analytics',
       documents: '/documents',
       contact: '/contact',
-      users: '/users'
+      users: '/users',
+      blog: '/blog',
+      newsletter: '/newsletter',
+
     }
 
     window.history.pushState({}, '', routes[page] || '/')
@@ -143,6 +150,8 @@ export default function App() {
             onContact={() => goToPage('contact')}
             onMom={() => goToPage('mom')}
             onRsvpAdmin={() => goToPage('rsvpAdmin')}
+            onBlog={() => goToPage('blog')}
+            onNewsletter={() => goToPage('newsletter')}
             onUserManagement={() => goToPage('users')}
           />
 
@@ -154,7 +163,7 @@ export default function App() {
                 <>
                   <Hero setCurrentPage={goToPage} />
                   <About />
-                  <Impact />
+                  <Impact isAdmin={isAdmin} />
                   <Projects
                     onViewAll={() => goToPage('allProjects')}
                     onViewArchives={() => goToPage('archives')}
@@ -279,6 +288,22 @@ export default function App() {
               {currentPage === 'rsvpAdmin' && permissions?.rsvp && (
                 <>
                   <EventRsvpAdmin isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {/* ── Blog ── */}
+              {currentPage === 'blog' && (
+                <>
+                  <Blog isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {/* ── News Letter ── */}
+              {currentPage === 'newsletter' && (
+                <>
+                  <NewsletterGenerator isAdmin={isAdmin} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}

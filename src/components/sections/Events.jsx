@@ -28,7 +28,7 @@ function getRsvpStorageKey(eventId) { return `rsvp_${eventId}` }
 // ── Send Reminder via EmailJS ─────────────────────────────────────────────────
 async function sendReminderEmail(event) {
   const { default: emailjs } = await import('@emailjs/browser')
-  return emailjs.send(
+  const result = await emailjs.send(
     EMAILJS_SERVICE_ID,
     EMAILJS_TEMPLATE_ID,
     {
@@ -38,20 +38,48 @@ async function sendReminderEmail(event) {
       event_location:    event.location,
       event_type:        event.type || '',
       event_description: event.description || '',
+      event_image:       event.image || '',
     },
     EMAILJS_PUBLIC_KEY
   )
+  // Log count to Firestore
+  const { doc, setDoc, getDoc, serverTimestamp } = await import('firebase/firestore')
+  const { db } = await import('../../firebase')
+  const ref  = doc(db, 'emailReminders', event.id)
+  const snap = await getDoc(ref)
+  const prev = snap.exists() ? (snap.data().count || 0) : 0
+  await setDoc(ref, {
+    eventId:    event.id,
+    eventTitle: event.title,
+    count:      prev + 1,
+    lastSentAt: serverTimestamp(),
+  })
+  return result
 }
 
 // ── Reminder Button ───────────────────────────────────────────────────────────
 function ReminderButton({ event }) {
   const [status, setStatus] = useState('idle') // idle | sending | sent | error
+  const [count,  setCount]  = useState(null)
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const { doc, getDoc } = await import('firebase/firestore')
+        const { db } = await import('../../firebase')
+        const snap = await getDoc(doc(db, 'emailReminders', event.id))
+        if (snap.exists()) setCount(snap.data().count || 0)
+      } catch {}
+    }
+    load()
+  }, [event.id])
 
   const handleSend = async () => {
     if (status === 'sending' || status === 'sent') return
     setStatus('sending')
     try {
       await sendReminderEmail(event)
+      setCount(c => (c || 0) + 1)
       setStatus('sent')
       setTimeout(() => setStatus('idle'), 4000)
     } catch (err) {
@@ -75,11 +103,11 @@ function ReminderButton({ event }) {
       {status === 'sending' ? (
         <><svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Sending...</>
       ) : status === 'sent' ? (
-        <><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>Sent!</>
+        <><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>Sent! {count ? `· ${count}` : ''}</>
       ) : status === 'error' ? (
         <>⚠ Failed</>
       ) : (
-        <><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>Remind</>
+        <><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>Remind {count ? `· ${count}` : ''}</>
       )}
     </button>
   )

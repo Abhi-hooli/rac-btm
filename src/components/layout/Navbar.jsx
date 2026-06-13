@@ -11,10 +11,10 @@ const navLinks = [
   { name: 'Leadership', href: '#leadership' },
   { name: 'Calendar', href: '#', isPage: true, pageKey: 'calendar' },
   { name: 'Documents', href: '#', isPage: true, pageKey: 'documents' },
-
+  { name: 'Blog', href: '#', isPage: true, pageKey: 'blog' },
 ]
 
-export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onContact, onMom, onRsvpAdmin, onUserManagement, currentPage }) {
+export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onContact, onMom, onRsvpAdmin, onUserManagement, onBlog, onNewsletter, currentPage }) {
   const [isScrolled, setIsScrolled] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
@@ -44,7 +44,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
     if (link.isPage) {
       if (link.pageKey === 'documents') onDocuments?.()
       else if (link.pageKey === 'calendar') onCalendar?.()
-      else if (link.pageKey === 'archives') onArchives?.()
+      else if (link.pageKey === 'blog') onBlog?.()
       return
     }
     if (currentPage !== 'home') {
@@ -202,6 +202,17 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                           RSVP Manager
                         </button>
                       )}
+
+                      {/* Newsletter */}
+                      <button
+                        onClick={() => { setAdminDropdownOpen(false); onNewsletter?.() }}
+                        className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-pink-50 hover:text-pink-700 transition-colors"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-pink-50 flex items-center justify-center flex-shrink-0">
+                          📰
+                        </div>
+                        Newsletter
+                      </button>
 
                       <div className="mx-3 border-t border-gray-100" />
 
