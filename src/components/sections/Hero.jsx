@@ -1,14 +1,22 @@
-import { motion } from 'framer-motion'
+import { useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import Button from '../ui/Button'
+import { useDocument } from '../../hooks/useFirestore'
 
-export default function Hero({ setCurrentPage }) {
+export default function Hero({ setCurrentPage, isAdmin }) {
+  const { data: heroSettings, save: saveHero } = useDocument('settings', 'hero', {
+    image: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&q=80'
+  })
+  const [showEdit, setShowEdit] = useState(false)
+  const [newUrl, setNewUrl] = useState('')
+
   return (
     <section className="relative min-h-screen flex items-center overflow-hidden">
 
       {/* ── Background image with filters ── */}
       <div className="absolute inset-0">
         <img
-          src="https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&q=80"
+          src={heroSettings.image}
           alt=""
           className="w-full h-full object-cover"
           style={{
@@ -84,6 +92,66 @@ export default function Hero({ setCurrentPage }) {
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+
+      {/* ── Admin: Edit Hero Image ── */}
+      {isAdmin && (
+        <div className="absolute top-20 right-6 z-20">
+          <button
+            onClick={() => { setNewUrl(heroSettings.image); setShowEdit(true) }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/40 backdrop-blur-sm text-white text-xs font-semibold border border-white/20 hover:bg-black/60 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Change Hero Image
+          </button>
+        </div>
+      )}
+
+      {/* ── Edit Modal ── */}
+      <AnimatePresence>
+        {showEdit && (
+          <motion.div
+            className="fixed inset-0 z-[300] flex items-center justify-center p-4"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          >
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowEdit(false)} />
+            <motion.div
+              className="relative w-full max-w-md bg-white rounded-2xl p-6 shadow-2xl"
+              initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+            >
+              <h3 className="font-display font-bold text-lg mb-1">Change Hero Image</h3>
+              <p className="text-sm text-gray-400 mb-4">Paste a WordPress image URL (1920×1080px recommended)</p>
+              <input
+                className="w-full px-4 py-2.5 rounded-lg bg-gray-100 border border-gray-200 text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 mb-3"
+                placeholder="https://your-wordpress.com/image.jpg"
+                value={newUrl}
+                onChange={e => setNewUrl(e.target.value)}
+              />
+              {newUrl && (
+                <div className="mb-4 rounded-lg overflow-hidden h-32">
+                  <img src={newUrl} alt="preview" className="w-full h-full object-cover" />
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowEdit(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => { await saveHero({ image: newUrl }); setShowEdit(false) }}
+                  disabled={!newUrl}
+                  className="flex-1 py-2.5 rounded-xl bg-rotary-blue text-white text-sm font-semibold disabled:opacity-50 hover:bg-rotary-blue/90 transition-colors"
+                >
+                  Save
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
   )
 }

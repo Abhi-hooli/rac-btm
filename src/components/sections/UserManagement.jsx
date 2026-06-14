@@ -10,6 +10,7 @@ const PERMISSION_SECTIONS = [
   { key: 'mom', label: 'MoM Tracker' },
   { key: 'treasurer', label: 'Treasurer Portal' },
   { key: 'rsvp', label: 'RSVP Manager' },
+  { key: 'gallery', label: 'Gallery' },
   { key: 'userManagement', label: 'User Management' }
 ]
 
@@ -23,7 +24,7 @@ const ROLE_PRESETS = {
   president: { label: 'President', perms: allPermissions() },
   secretary: {
     label: 'Secretary',
-    perms: { ...emptyPermissions(), rsvp: true, attendance: true, mom: true }
+    perms: { ...emptyPermissions(), rsvp: true, attendance: true, mom: true, gallery: true }
   },
   treasurer: {
     label: 'Treasurer',

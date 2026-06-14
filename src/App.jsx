@@ -9,6 +9,7 @@ import UserManagement from "./components/sections/UserManagement";
 import { logAction } from './utils/auditLog'
 
 
+
 const Blog = lazy(() => import('./components/sections/Blog'))
 const Hero = lazy(() => import('./components/sections/Hero'))
 const About = lazy(() => import('./components/sections/About'))
@@ -31,6 +32,8 @@ const ContactPage = lazy(() => import('./components/sections/ContactPage'))
 const EventRsvpAdmin = lazy(() => import('./components/sections/EventRsvpAdmin'))
 const ArchivesPage = lazy(() => import('./components/sections/ArchivesPage'))
 const NewsletterGenerator = lazy(() => import('./components/sections/NewsletterGenerator'))
+const Gallery = lazy(() => import('./components/sections/Gallery'))
+const GalleryPreview = lazy(() => import('./components/sections/GalleryPreview'))
 
 
 const SectionLoader = () => (
@@ -123,6 +126,7 @@ useEffect(() => {
         '/users': 'users',
         '/blog': 'blog',
         '/newsletter': 'newsletter',
+        '/gallery': 'gallery',
       }
       const page = pathMap[path]
       if (page) setCurrentPage(page)
@@ -151,7 +155,7 @@ useEffect(() => {
       users: '/users',
       blog: '/blog',
       newsletter: '/newsletter',
-
+      gallery: '/gallery',
     }
 
     window.history.pushState({}, '', routes[page] || '/')
@@ -228,7 +232,7 @@ useEffect(() => {
               {/* ── Home ── */}
               {currentPage === 'home' && (
                 <>
-                  <Hero setCurrentPage={goToPage} />
+                  <Hero setCurrentPage={goToPage} isAdmin={isAdmin} />
                   <About />
                   <Impact isAdmin={isAdmin} />
                   <Projects
@@ -237,7 +241,8 @@ useEffect(() => {
                   />
                   <Events isAdmin={isAdmin} />
                   <Leadership onViewTeam={() => goToPage('ourTeam')} isAdmin={isAdmin} />
-                  <Testimonials />
+                  <GalleryPreview onViewAll={() => goToPage('gallery')} />
+                  <Testimonials isAdmin={isAdmin} />
                   <JoinCTA setCurrentPage={goToPage} />
                   <Footer goToPage={goToPage} />
                 </>
@@ -373,6 +378,14 @@ useEffect(() => {
                 </>
               )}
 
+              {/* ── Gallery ── */}
+              {currentPage === 'gallery' && (
+                <>
+                  <Gallery isAdmin={isAdmin} permissions={permissions} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
               {currentPage === 'newsletter' && !isAdmin && goToPage('home')}
               {/* ── News Letter ── */}
               {currentPage === 'newsletter' && isAdmin && (
@@ -380,6 +393,7 @@ useEffect(() => {
                   <NewsletterGenerator isAdmin={isAdmin} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
+                
               )}
 
             </Suspense>

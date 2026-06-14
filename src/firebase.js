@@ -15,7 +15,7 @@ const app = initializeApp(firebaseConfig)
 export const db = getFirestore(app)
 export const auth = getAuth(app)
 
-const ALL_PERMS = { analytics: true, attendance: true, mom: true, treasurer: true, rsvp: true, userManagement: true }
+const ALL_PERMS = { analytics: true, attendance: true, mom: true, treasurer: true, rsvp: true, userManagement: true, gallery: true }
 
 export async function firebaseAdminLogin(email, password) {
   const result = await signInWithEmailAndPassword(auth, email, password)
@@ -26,8 +26,6 @@ export async function firebaseAdminLogin(email, password) {
     throw new Error('Unauthorized. Contact the club admin for access.')
   }
   const userData = snap.docs[0].data()
-  console.log('userData:', userData)
-  console.log('isSuperAdmin:', userData.isSuperAdmin)
   if (userData.isSuperAdmin) {
     return { user: result.user, permissions: ALL_PERMS }
   }
