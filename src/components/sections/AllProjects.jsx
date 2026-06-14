@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import * as XLSX from 'xlsx'
 import { useCollection } from '../../hooks/useFirestore'
 import { colorOptions, rotaractAvenues, areasOfFocus, inputClass, ProjectModal } from './Projects'
+import { logAction } from '../../utils/auditLog'
 
 const activityTypes = [
   'Standalone Activity',
@@ -330,8 +331,10 @@ export default function AllProjects({ isAdmin, onBack }) {
   const handleSave = async () => {
     if (!form.title) return
     await save({ ...form, id: editingId || Date.now().toString() })
+    logAction({ admin: 'admin', action: editingId ? 'EDIT' : 'CREATE', module: 'Projects', item: form.title, details: `Project ${editingId ? 'updated' : 'created'}` })
     resetForm()
   }
+
 
   const handleEdit = (p) => {
     setForm({
@@ -351,7 +354,11 @@ export default function AllProjects({ isAdmin, onBack }) {
   }
 
   const handleRemove = async (id) => {
-    if (confirm('Remove this project?')) await remove(id)
+    if (confirm('Remove this project?')) {
+      const projectTitle = projects.find(p => p.id === id)?.title || id
+      await remove(id)
+      logAction({ admin: 'admin', action: 'DELETE', module: 'Projects', item: projectTitle, details: 'Project deleted' })
+    }
   }
 
   // ── Bulk upload handlers ──

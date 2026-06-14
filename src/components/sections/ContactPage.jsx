@@ -15,8 +15,8 @@ const CONTACT_CARDS = [
       </svg>
     ),
     label: 'Email Us',
-    value: 'rotaractbtm@gmail.com',
-    href: 'mailto:rotaractbtm@gmail.com',
+    value: 'racbtm@gmail.com',
+    href: 'mailto:racbtm@gmail.com',
     color: 'text-rotary-blue',
     bg: 'bg-rotary-blue/10 dark:bg-rotary-blue/10',
   },
@@ -45,33 +45,36 @@ const CONTACT_CARDS = [
     color: 'text-pink-500',
     bg: 'bg-pink-500/10',
   },
-  {
-    icon: (
-      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-      </svg>
-    ),
-    label: 'Facebook',
-    value: 'Rotaract BTM',
-    href: 'https://facebook.com/rotaractbtm',
-    color: 'text-blue-600',
-    bg: 'bg-blue-600/10',
-  },
 ]
 
 export default function ContactPage({ onBack }) {
   const [form, setForm] = useState({ name: '', phone: '', email: '', subject: '', message: '' })
-  const [status, setStatus] = useState('idle') // idle | sending | sent | error
+  const [status, setStatus] = useState('idle')
 
   const handleSubmit = async () => {
-    if (!form.name || !form.email || !form.message) return
+    if (!form.name || !form.phone || !form.message) return
     setStatus('sending')
-
-    // Replace with your actual form submission endpoint (e.g. EmailJS, Formspree, Firebase)
     try {
-      await new Promise(r => setTimeout(r, 1500)) // simulate API call
-      setStatus('sent')
-      setForm({ name: '', phone: '', email: '', subject: '', message: '' })
+      const res = await fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          access_key: '88d61483-d522-4500-8d78-fc74ec897b0c',
+          name:       form.name,
+          phone:      form.phone,
+          email:      form.email,
+          subject:    `New Contact: ${form.subject || 'General Enquiry'}`,
+          message:    form.message,
+          from_name:  'Rotaract BTM Website',
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setStatus('sent')
+        setForm({ name: '', phone: '', email: '', subject: '', message: '' })
+      } else {
+        setStatus('error')
+      }
     } catch {
       setStatus('error')
     }
@@ -85,10 +88,7 @@ export default function ContactPage({ onBack }) {
 
         {/* Header */}
         <motion.div className="flex items-center gap-4 mb-12" {...fadeUp(0)}>
-          <button
-            onClick={onBack}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 transition-colors"
-          >
+          <button onClick={onBack} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
@@ -117,24 +117,15 @@ export default function ContactPage({ onBack }) {
                     <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">
                       Your Name <span className="text-red-400">*</span>
                     </label>
-                    <input
-                      className={iClass}
-                      placeholder="Rtr. John Doe"
-                      value={form.name}
-                      onChange={e => setForm({ ...form, name: e.target.value })}
-                    />
+                    <input className={iClass} placeholder="Rtr. John Doe"
+                      value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">
                       Phone Number <span className="text-red-400">*</span>
                     </label>
-                    <input
-                      className={iClass}
-                      type="tel"
-                      placeholder="+91 98765 43210"
-                      value={form.phone}
-                      onChange={e => setForm({ ...form, phone: e.target.value })}
-                    />
+                    <input className={iClass} type="tel" placeholder="+91 98765 43210"
+                      value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
                   </div>
                 </div>
 
@@ -142,24 +133,16 @@ export default function ContactPage({ onBack }) {
                   <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">
                     Email Address
                   </label>
-                  <input
-                    className={iClass}
-                    type="email"
-                    placeholder="you@example.com"
-                    value={form.email}
-                    onChange={e => setForm({ ...form, email: e.target.value })}
-                  />
+                  <input className={iClass} type="email" placeholder="you@example.com"
+                    value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">
                     Subject
                   </label>
-                  <select
-                    className={`${iClass} cursor-pointer`}
-                    value={form.subject}
-                    onChange={e => setForm({ ...form, subject: e.target.value })}
-                  >
+                  <select className={`${iClass} cursor-pointer`}
+                    value={form.subject} onChange={e => setForm({ ...form, subject: e.target.value })}>
                     <option value="" disabled>Select a subject...</option>
                     <option value="Join the Club">Join the Club</option>
                     <option value="Donate">Donate</option>
@@ -171,62 +154,33 @@ export default function ContactPage({ onBack }) {
                   <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">
                     Message <span className="text-red-400">*</span>
                   </label>
-                  <textarea
-                    className={`${iClass} resize-none`}
-                    rows={5}
+                  <textarea className={`${iClass} resize-none`} rows={5}
                     placeholder="Tell us how we can help..."
-                    value={form.message}
-                    onChange={e => setForm({ ...form, message: e.target.value })}
-                  />
+                    value={form.message} onChange={e => setForm({ ...form, message: e.target.value })} />
                 </div>
 
-                {/* Submit */}
                 <div className="flex items-center gap-4 pt-1">
-                  <button
-                    onClick={handleSubmit}
+                  <button onClick={handleSubmit}
                     disabled={status === 'sending' || status === 'sent' || !form.name || !form.phone || !form.message}
-                    className="flex items-center gap-2 px-7 py-3 rounded-xl bg-rotary-blue text-white font-semibold text-sm hover:bg-rotary-blue/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm shadow-rotary-blue/20"
-                  >
+                    className="flex items-center gap-2 px-7 py-3 rounded-xl bg-rotary-blue text-white font-semibold text-sm hover:bg-rotary-blue/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm shadow-rotary-blue/20">
                     {status === 'sending' ? (
-                      <>
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Sending...
-                      </>
+                      <><svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Sending...</>
                     ) : status === 'sent' ? (
-                      <>
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        Sent!
-                      </>
+                      <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>Sent!</>
                     ) : (
-                      <>
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                        </svg>
-                        Send Message
-                      </>
+                      <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>Send Message</>
                     )}
                   </button>
 
                   {status === 'sent' && (
-                    <motion.p
-                      className="text-sm text-green-600 dark:text-green-400 font-medium"
-                      initial={{ opacity: 0, x: -8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                    >
+                    <motion.p className="text-sm text-green-600 dark:text-green-400 font-medium"
+                      initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}>
                       Thanks! We'll get back to you soon.
                     </motion.p>
                   )}
                   {status === 'error' && (
-                    <motion.p
-                      className="text-sm text-red-500 font-medium"
-                      initial={{ opacity: 0, x: -8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                    >
+                    <motion.p className="text-sm text-red-500 font-medium"
+                      initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}>
                       Something went wrong. Please try again.
                     </motion.p>
                   )}
@@ -241,26 +195,18 @@ export default function ContactPage({ onBack }) {
             {/* Contact cards */}
             <motion.div className="grid grid-cols-1 gap-3" {...fadeUp(0.2)}>
               {CONTACT_CARDS.map((card, i) => (
-                <motion.a
-                  key={i}
-                  href={card.href}
+                <motion.a key={i} href={card.href}
                   target={card.href.startsWith('http') ? '_blank' : undefined}
                   rel="noopener noreferrer"
                   className="flex items-center gap-4 p-4 bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 hover:shadow-md hover:-translate-y-0.5 transition-all group"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.2 + i * 0.07, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-                >
+                  initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.2 + i * 0.07, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${card.bg} ${card.color}`}>
                     {card.icon}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-rotary-slate dark:text-white/40 mb-0.5">
-                      {card.label}
-                    </p>
-                    <p className={`text-sm font-semibold truncate ${card.color} group-hover:underline`}>
-                      {card.value}
-                    </p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-rotary-slate dark:text-white/40 mb-0.5">{card.label}</p>
+                    <p className={`text-sm font-semibold truncate ${card.color} group-hover:underline`}>{card.value}</p>
                   </div>
                   <svg className={`w-4 h-4 ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity ${card.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -270,10 +216,7 @@ export default function ContactPage({ onBack }) {
             </motion.div>
 
             {/* Map embed */}
-            <motion.div
-              className="rounded-2xl overflow-hidden border border-gray-100 dark:border-white/5 shadow-sm"
-              {...fadeUp(0.45)}
-            >
+            <motion.div className="rounded-2xl overflow-hidden border border-gray-100 dark:border-white/5 shadow-sm" {...fadeUp(0.45)}>
               <div className="bg-white dark:bg-rotary-navy-light px-4 py-3 border-b border-gray-100 dark:border-white/5 flex items-center gap-2">
                 <svg className="w-4 h-4 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
@@ -281,41 +224,10 @@ export default function ContactPage({ onBack }) {
                 </svg>
                 <span className="text-sm font-semibold">BTM Layout, Bengaluru</span>
               </div>
-              <iframe
-                title="Rotaract BTM Location"
+              <iframe title="Rotaract BTM Location"
                 src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d15554.53!2d77.6101!3d12.9165!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3bae1529a65ef565%3A0x1b9d9bc9f3c6c9c6!2sBTM%20Layout%2C%20Bengaluru%2C%20Karnataka!5e0!3m2!1sen!2sin!4v1680000000000"
-                width="100%"
-                height="220"
-                style={{ border: 0, display: 'block' }}
-                allowFullScreen=""
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-              />
-            </motion.div>
-
-            {/* Club hours */}
-            <motion.div
-              className="bg-white dark:bg-rotary-navy-light rounded-2xl border border-gray-100 dark:border-white/5 p-5"
-              {...fadeUp(0.5)}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <svg className="w-4 h-4 text-rotary-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <h3 className="font-display font-semibold text-sm">Meeting Schedule</h3>
-              </div>
-              <div className="space-y-2">
-                {[
-                  { day: 'Weekly Meetings', time: 'Every Sunday, 10:00 AM', highlight: true },
-                  { day: 'Board Meetings', time: '1st Saturday of the month', highlight: false },
-                  { day: 'Response Time', time: 'Within 24 hours', highlight: false },
-                ].map((row, i) => (
-                  <div key={i} className={`flex items-center justify-between py-2 px-3 rounded-lg ${row.highlight ? 'bg-rotary-blue/5 dark:bg-rotary-blue/10' : ''}`}>
-                    <span className="text-sm text-rotary-slate dark:text-white/50">{row.day}</span>
-                    <span className={`text-sm font-semibold ${row.highlight ? 'text-rotary-blue' : 'text-rotary-charcoal dark:text-white'}`}>{row.time}</span>
-                  </div>
-                ))}
-              </div>
+                width="100%" height="220" style={{ border: 0, display: 'block' }}
+                allowFullScreen="" loading="lazy" referrerPolicy="no-referrer-when-downgrade" />
             </motion.div>
 
           </div>

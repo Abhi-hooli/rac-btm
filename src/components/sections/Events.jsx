@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Card from '../ui/Card'
 import { useCollection } from '../../hooks/useFirestore'
+import { logAction } from '../../utils/auditLog'
 
 // ── EmailJS config ────────────────────────────────────────────────────────────
 const EMAILJS_SERVICE_ID  = 'service_s15ywsk'
@@ -159,7 +160,7 @@ function RSVPModal({ event, onClose, onSuccess, existingRsvp }) {
   const totalAttendees = parseInt(form.guests) || 1
 
   const handleSubmit = async () => {
-    if (!form.name.trim() || !form.email.trim() || !form.phone.trim()) { setError('Name, email and phone are required.'); return }
+    if (form.honeypot) return // Bot detected — silently ignore
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { setError('Please enter a valid email address.'); return }
     setError(''); setLoading(true)
     try {
@@ -231,6 +232,8 @@ function RSVPModal({ event, onClose, onSuccess, existingRsvp }) {
                     </div>
                   </div>
                   <div><label className="text-xs font-medium text-rotary-slate dark:text-white/50 block mb-1">Dietary notes (optional)</label><input className={inputClass} placeholder="e.g. vegetarian, wheelchair access..." value={form.dietaryNotes} onChange={e => setForm({ ...form, dietaryNotes: e.target.value })} /></div>
+                  {/* Honeypot — hidden from humans, bots fill it */}
+                  <input type="text" name="website" value={form.honeypot || ''} onChange={e => setForm({ ...form, honeypot: e.target.value })} style={{ display: 'none' }} tabIndex={-1} autoComplete="off" />
                   {error && <p className="text-xs text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-500/10 px-3 py-2 rounded-lg">{error}</p>}
                 </div>
                 <div className="mt-5 flex items-center gap-2 text-xs text-rotary-slate dark:text-white/30 mb-4">
@@ -404,7 +407,11 @@ export default function Events({ isAdmin }) {
 
   const handleSave = async () => {
     if (!form.title || !form.date || !form.time || !form.location) return
-    try { await save({ id: editingId || Date.now().toString(), ...form }); resetForm() }
+    try {
+      await save({ id: editingId || Date.now().toString(), ...form })
+      logAction({ admin: 'admin', action: editingId ? 'EDIT' : 'CREATE', module: 'Events', item: form.title, details: `Event ${editingId ? 'updated' : 'created'}` })
+      resetForm()
+    }
     catch (error) { console.error('Error saving event:', error) }
   }
 
@@ -415,7 +422,11 @@ export default function Events({ isAdmin }) {
 
   const handleConfirmDelete = async () => {
     if (!deleteId) return
-    try { await remove(deleteId) } catch (error) { console.error('Error deleting event:', error) }
+    try {
+      const eventTitle = events.find(e => e.id === deleteId)?.title || deleteId
+      await remove(deleteId)
+      logAction({ admin: 'admin', action: 'DELETE', module: 'Events', item: eventTitle, details: `Event deleted` })
+    } catch (error) { console.error('Error deleting event:', error) }
     setDeleteId(null)
   }
 

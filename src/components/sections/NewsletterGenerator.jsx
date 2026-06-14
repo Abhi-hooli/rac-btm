@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useCollection } from '../../hooks/useFirestore'
+import { logAction } from '../../utils/auditLog'
 
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 
@@ -294,6 +295,7 @@ export default function NewsletterGenerator({ isAdmin, onBack }) {
       createdAt:    new Date().toISOString(),
       isNewsletter: true,
     })
+    logAction({ admin: 'admin', action: 'PUBLISH', module: 'Newsletter', item: title, details: `Newsletter pushed to blog for ${month} ${year}` })
     setPushing(false); setPushed(true)
     setTimeout(() => setPushed(false), 4000)
   }

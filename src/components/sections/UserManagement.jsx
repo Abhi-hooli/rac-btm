@@ -36,7 +36,7 @@ const ROLE_PRESETS = {
   admin: { label: 'Admin', perms: allPermissions() }
 }
 
-const SUPER_ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL
+const SUPER_ADMIN_EMAIL = null // no longer needed
 
 export default function UserManagement({ onBack }) {
   const [users, setUsers] = useState([])
@@ -217,7 +217,7 @@ export default function UserManagement({ onBack }) {
         ) : (
           <div className="space-y-6">
             {users.map(user => {
-              const isSuperAdmin = user.email === SUPER_ADMIN_EMAIL
+              const isSuperAdmin = user.isSuperAdmin === true
               return (
                 <div key={user.id} className="bg-gray-50 dark:bg-rotary-navy-light rounded-2xl p-6">
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-4">

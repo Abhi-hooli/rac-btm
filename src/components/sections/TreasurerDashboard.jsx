@@ -15,7 +15,7 @@ function inRange(dateStr, from, to) {
 
 function exportDuesCSV(members) {
   const { data: leaders } = useCollection('leaders')
-  const headers = ['#', 'Member Name', 'Type', 'Annual Due (₹)', 'Paid (₹)', 'Pending (₹)', 'Status', 'Payment Date', 'Note']
+  const headers = ['#', 'Member Name', 'Type', 'Annual Due (₹)', 'Paid (₹)', 'Pending (₹)', 'Status', 'Payment Date', 'Payment Mode', 'Note']
   const rows = members.map((m, i) => {
     const pending = (m.annualDue || 0) - (m.paid || 0)
     const status = m.paid >= m.annualDue ? 'Paid' : m.paid > 0 ? 'Partial' : 'Unpaid'
@@ -23,11 +23,12 @@ function exportDuesCSV(members) {
     const type = leader?.memberType === 'working' ? 'Working Professional' : 'Student'
     return [i + 1, `"${m.name}"`, type, m.annualDue || 0, m.paid || 0, pending, status,
     m.paymentDate ? new Date(m.paymentDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
+    m.paymentMode || '',
     `"${m.note || ''}"`].join(',')
   })
   const totalDue = members.reduce((s, m) => s + (m.annualDue || 0), 0)
   const totalPaid = members.reduce((s, m) => s + (m.paid || 0), 0)
-  rows.push(['', '"TOTAL"', '', totalDue, totalPaid, totalDue - totalPaid, '', '', ''].join(','))
+  rows.push(['', '"TOTAL"', '', totalDue, totalPaid, totalDue - totalPaid, '', '', '', ''].join(','))
   const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -70,17 +71,20 @@ function SummaryCards({ members, events, sponsorships = [], dateRange = {} }) {
 }
 
 // ── Members Dues Tab ──
+const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque']
+
 function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
   const { data: leaders } = useCollection('leaders')
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all') // 'all' | 'paid' | 'partial' | 'unpaid'
   const [deleteId, setDeleteId] = useState(null)
   const [editingMember, setEditingMember] = useState(null)
-  const [editForm, setEditForm] = useState({ paid: 0, paymentDate: '', note: '' })
+  const [editForm, setEditForm] = useState({ paid: 0, paymentDate: '', paymentMode: '', note: '' })
 
   const handleRemove = (id) => setDeleteId(id)
   const openEdit = (m) => {
     setEditingMember(m)
-    setEditForm({ paid: m.paid || 0, paymentDate: m.paymentDate || '', note: m.note || '' })
+    setEditForm({ paid: m.paid || 0, paymentDate: m.paymentDate || '', paymentMode: m.paymentMode || '', note: m.note || '' })
   }
   const markPaid = async (id) => {
     const m = members.find(x => x.id === id)
@@ -125,6 +129,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
       <div class="row"><span class="label">Member Type</span><span class="value">${m.note || 'Member'}</span></div>
       <div class="row"><span class="label">Annual Due</span><span class="value">₹${(m.annualDue || 0).toLocaleString()}</span></div>
       <div class="row"><span class="label">Payment Date</span><span class="value">${m.paymentDate ? new Date(m.paymentDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Not recorded'}</span></div>
+      ${m.paymentMode ? `<div class="row"><span class="label">Payment Mode</span><span class="value">${m.paymentMode}</span></div>` : ''}
       <div class="amount-box">
         <div class="amt">₹${(m.paid || 0).toLocaleString()}</div>
         <div class="sub">Amount Paid <span class="status ${isPaid ? 'paid' : 'partial'}">${isPaid ? '✓ PAID' : 'PARTIAL'}</span></div>
@@ -146,13 +151,35 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
 
   const { from, to } = dateRange
   const rangeFiltered = (from || to) ? members.filter(m => m.paymentDate ? inRange(m.paymentDate, from, to) : false) : members
-  const filtered = search ? rangeFiltered.filter(m => m.name.toLowerCase().includes(search.toLowerCase())) : rangeFiltered
+
+  const statusFiltered = rangeFiltered.filter(m => {
+    if (statusFilter === 'all') return true
+    const isPaid = m.paid >= m.annualDue && m.annualDue > 0
+    const isPartial = m.paid > 0 && m.paid < m.annualDue
+    if (statusFilter === 'paid') return isPaid
+    if (statusFilter === 'partial') return isPartial
+    if (statusFilter === 'unpaid') return !isPaid && !isPartial
+    return true
+  })
+
+  const filtered = search
+    ? statusFiltered.filter(m => m.name.toLowerCase().includes(search.toLowerCase()))
+    : statusFiltered
+
   const totalDue = members.reduce((s, m) => s + (m.annualDue || 0), 0)
   const totalPaid = members.reduce((s, m) => s + (m.paid || 0), 0)
 
+  // Status counts for filter badges
+  const counts = {
+    all: rangeFiltered.length,
+    paid: rangeFiltered.filter(m => m.paid >= m.annualDue && m.annualDue > 0).length,
+    partial: rangeFiltered.filter(m => m.paid > 0 && m.paid < m.annualDue).length,
+    unpaid: rangeFiltered.filter(m => !(m.paid > 0)).length,
+  }
+
   return (
     <div>
-      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="flex-1 relative">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-rotary-slate dark:text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
           <input className={`${inputClass} !pl-10`} placeholder="Search members..." value={search} onChange={e => setSearch(e.target.value)} />
@@ -161,6 +188,27 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
           Export
         </button>
+      </div>
+
+      {/* ── Status filter pills ── */}
+      <div className="flex flex-wrap gap-2 mb-6">
+        {[
+          { key: 'all', label: 'All', color: 'bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60', active: 'bg-rotary-blue text-white' },
+          { key: 'paid', label: 'Paid', color: 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400', active: 'bg-green-600 text-white' },
+          { key: 'partial', label: 'Partial', color: 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400', active: 'bg-amber-500 text-white' },
+          { key: 'unpaid', label: 'Unpaid', color: 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400', active: 'bg-red-500 text-white' },
+        ].map(({ key, label, color, active }) => (
+          <button
+            key={key}
+            onClick={() => setStatusFilter(key)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${statusFilter === key ? active : color}`}
+          >
+            {label}
+            <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold ${statusFilter === key ? 'bg-white/20' : 'bg-black/5 dark:bg-white/10'}`}>
+              {counts[key]}
+            </span>
+          </button>
+        ))}
       </div>
 
       <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
@@ -174,6 +222,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                 <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Paid</th>
                 <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Status</th>
                 <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Payment Date</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Mode</th>
                 <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Receipt</th>
                 <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Note</th>
                 <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Actions</th>
@@ -189,7 +238,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                   <tr key={m.id} className="border-b border-gray-50 dark:border-white/[0.03] hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
                     <td className="px-5 py-3 font-medium">{m.name}</td>
                     <td className="px-5 py-3">
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${memberType === 'Working' ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400'}`}>{memberType}</span>
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${memberType === 'Working Professional' ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400'}`}>{memberType}</span>
                     </td>
                     <td className="px-5 py-3 text-right">₹{(m.annualDue || 0).toLocaleString()}</td>
                     <td className="px-5 py-3 text-right">₹{(m.paid || 0).toLocaleString()}</td>
@@ -200,6 +249,11 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                     </td>
                     <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">
                       {m.paymentDate ? new Date(m.paymentDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                    </td>
+                    <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">
+                      {m.paymentMode
+                        ? <span className="inline-block px-2 py-0.5 rounded-md bg-gray-100 dark:bg-white/5 font-medium">{m.paymentMode}</span>
+                        : <span className="text-rotary-slate dark:text-white/20">—</span>}
                     </td>
                     <td className="px-5 py-3 text-center">
                       {m.paid > 0 ? (
@@ -230,7 +284,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                 )
               })}
               {filtered.length === 0 && (
-                <tr><td colSpan={9} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No members found.</td></tr>
+                <tr><td colSpan={10} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No members found.</td></tr>
               )}
             </tbody>
             <tfoot>
@@ -238,7 +292,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                 <td className="px-5 py-3 font-semibold" colSpan={2}>Total ({members.length})</td>
                 <td className="px-5 py-3 text-right font-semibold">₹{totalDue.toLocaleString()}</td>
                 <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalPaid.toLocaleString()}</td>
-                <td colSpan={5} className="px-5 py-3 text-right text-sm text-rotary-slate dark:text-white/40">
+                <td colSpan={6} className="px-5 py-3 text-right text-sm text-rotary-slate dark:text-white/40">
                   Pending: <span className="font-semibold text-amber-600 dark:text-amber-400">₹{(totalDue - totalPaid).toLocaleString()}</span>
                 </td>
               </tr>
@@ -259,12 +313,12 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
               </div>
               <h3 className="font-display font-bold text-lg mb-1">Remove Member?</h3>
               <p className="text-sm text-gray-400 dark:text-white/50 mb-6">This will permanently remove this member's dues record.</p>
-              </motion.div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-<AnimatePresence>
+      <AnimatePresence>
         {editingMember && (
           <motion.div
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -311,11 +365,32 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                   />
                 </div>
 
+                {/* ── Payment Mode ── */}
+                <div>
+                  <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Payment Mode</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {PAYMENT_MODES.map(mode => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setEditForm({ ...editForm, paymentMode: editForm.paymentMode === mode ? '' : mode })}
+                        className={`py-2 rounded-lg border text-xs font-semibold transition-colors ${
+                          editForm.paymentMode === mode
+                            ? 'border-rotary-blue bg-rotary-blue/10 text-rotary-blue dark:text-rotary-blue'
+                            : 'border-gray-200 dark:border-white/10 text-rotary-slate dark:text-white/50 hover:bg-gray-50 dark:hover:bg-white/5'
+                        }`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div>
                   <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Note</label>
                   <input
                     className={inputClass}
-                    placeholder="e.g. Paid via UPI, cash, etc."
+                    placeholder="e.g. reference no., collected by, etc."
                     value={editForm.note}
                     onChange={e => setEditForm({ ...editForm, note: e.target.value })}
                   />
@@ -456,7 +531,6 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
 
   return (
     <div>
-      {/* Search + actions */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
         <div className="flex-1 relative">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-rotary-slate dark:text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
@@ -472,23 +546,15 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
         </button>
       </div>
 
-      {/* ── Add / Edit Form (Change 6) ── */}
       <AnimatePresence>
         {showForm && (
           <motion.div className="mb-6 bg-white dark:bg-rotary-navy-light rounded-xl p-5 border border-gray-100 dark:border-white/5" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
             <h4 className="font-display font-semibold mb-4">{editingId ? 'Edit Project' : 'New Project Ledger'}</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-
-              {/* Project dropdown — pulled from projects collection */}
               <div>
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Project *</label>
-                <select
-                  className={inputClass}
-                  value={form.eventName}
-                  onChange={e => setForm({ ...form, eventName: e.target.value })}
-                >
+                <select className={inputClass} value={form.eventName} onChange={e => setForm({ ...form, eventName: e.target.value })}>
                   <option value="">Select a project…</option>
-                  {/* Show current value if it doesn't match any project (old data) */}
                   {form.eventName && !projects.find(p => p.title === form.eventName) && (
                     <option value={form.eventName}>{form.eventName} (old record)</option>
                   )}
@@ -497,24 +563,19 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
                   ))}
                 </select>
               </div>
-
               <div>
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Date</label>
                 <input className={inputClass} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
               </div>
-
               <div>
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Budget / Total Cost (₹)</label>
                 <input className={inputClass} type="number" min="0" value={form.budget || ''} onChange={e => setForm({ ...form, budget: parseInt(e.target.value) || 0 })} />
               </div>
-
-              {/* Income field — separate from expenses */}
               <div>
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Income Received (₹)</label>
                 <input className={inputClass} type="number" min="0" placeholder="Ticket sales, collections, entry fees…" value={form.income || ''} onChange={e => setForm({ ...form, income: parseInt(e.target.value) || 0 })} />
               </div>
             </div>
-
             <div className="flex gap-3 mt-4">
               <button onClick={handleSaveEvent} disabled={!form.eventName} className="px-5 py-2 rounded-lg bg-rotary-gold text-rotary-navy font-semibold text-sm disabled:opacity-50 transition-colors">{editingId ? 'Save' : 'Add Project'}</button>
               {editingId && <button onClick={resetForm} className="px-5 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-sm">Cancel</button>}
@@ -523,7 +584,6 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
         )}
       </AnimatePresence>
 
-      {/* ── Table (Change 8) ── */}
       <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -558,28 +618,23 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
                       <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">
                         {ev.date ? new Date(ev.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                       </td>
-                      {/* Budget */}
                       <td className="px-5 py-3 text-right text-rotary-slate dark:text-white/40">
                         {ev.budget > 0 ? `₹${ev.budget.toLocaleString()}` : '—'}
                       </td>
-                      {/* Income */}
                       <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">
                         {totalIncome > 0 ? `₹${totalIncome.toLocaleString()}` : '—'}
                       </td>
-                      {/* Expenses */}
                       <td className="px-5 py-3 text-right">
                         <span className={`font-semibold ${overBudget ? 'text-red-500' : 'text-rotary-charcoal dark:text-white'}`}>
                           ₹{totalSpent.toLocaleString()}
                         </span>
                         {overBudget && <span className="ml-1.5 text-xs text-red-400">over</span>}
                       </td>
-                      {/* Net = Income − Expenses */}
                       <td className="px-5 py-3 text-right">
                         <span className={`font-semibold ${net >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
                           {net >= 0 ? '+' : ''}₹{net.toLocaleString()}
                         </span>
                       </td>
-                      {/* Items count */}
                       <td className="px-5 py-3 text-center">
                         <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-white/5 text-rotary-slate dark:text-white/50">
                           {(ev.expenses || []).length}
@@ -597,21 +652,13 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
                       </td>
                     </tr>
 
-                    {/* Expanded expense detail — colSpan updated to 8 */}
                     {isExpanded && (
                       <tr key={`${ev.id}-exp`} className="bg-gray-50 dark:bg-white/[0.02]">
                         <td colSpan={8} className="px-5 py-4">
-                          {/* Income vs Expenses summary strip */}
                           <div className="flex items-center gap-6 mb-4 px-1 text-sm">
-                            <span className="text-green-600 dark:text-green-400 font-semibold">
-                              ↑ Income: ₹{totalIncome.toLocaleString()}
-                            </span>
-                            <span className="text-red-500 font-semibold">
-                              ↓ Expenses: ₹{totalSpent.toLocaleString()}
-                            </span>
-                            <span className={`font-bold ${net >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
-                              Net: {net >= 0 ? '+' : ''}₹{net.toLocaleString()}
-                            </span>
+                            <span className="text-green-600 dark:text-green-400 font-semibold">↑ Income: ₹{totalIncome.toLocaleString()}</span>
+                            <span className="text-red-500 font-semibold">↓ Expenses: ₹{totalSpent.toLocaleString()}</span>
+                            <span className={`font-bold ${net >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>Net: {net >= 0 ? '+' : ''}₹{net.toLocaleString()}</span>
                           </div>
 
                           {ev.budget > 0 && (
@@ -702,7 +749,6 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
                             </div>
                           ) : <p className="text-sm text-rotary-slate dark:text-white/30 mb-4">No expenses yet. Add one below.</p>}
 
-                          {/* Add expense row */}
                           <div className="grid grid-cols-2 md:grid-cols-5 gap-2 items-end pt-2 border-t border-gray-200 dark:border-white/10">
                             <input className={inputClass} placeholder="Description *" value={expenseForm.description} onChange={e => setExpenseForm({ ...expenseForm, description: e.target.value })} />
                             <select className={inputClass} value={expenseForm.category} onChange={e => setExpenseForm({ ...expenseForm, category: e.target.value })}>
@@ -727,12 +773,8 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
                 <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
                   <td className="px-5 py-3 font-semibold" colSpan={2}>Total ({filtered.length} projects)</td>
                   <td className="px-5 py-3 text-right text-rotary-slate dark:text-white/40">—</td>
-                  <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">
-                    ₹{filtered.reduce((s, e) => s + (e.income || 0), 0).toLocaleString()}
-                  </td>
-                  <td className="px-5 py-3 text-right font-semibold text-rotary-blue">
-                    ₹{filtered.reduce((s, e) => s + (e.expenses || []).reduce((ss, x) => ss + (x.amount || 0), 0), 0).toLocaleString()}
-                  </td>
+                  <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{filtered.reduce((s, e) => s + (e.income || 0), 0).toLocaleString()}</td>
+                  <td className="px-5 py-3 text-right font-semibold text-rotary-blue">₹{filtered.reduce((s, e) => s + (e.expenses || []).reduce((ss, x) => ss + (x.amount || 0), 0), 0).toLocaleString()}</td>
                   <td className="px-5 py-3 text-right font-bold">
                     {(() => {
                       const totInc = filtered.reduce((s, e) => s + (e.income || 0), 0)
@@ -749,7 +791,6 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
         </div>
       </div>
 
-      {/* Delete confirm */}
       <AnimatePresence>
         {deleteId && (
           <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -969,89 +1010,9 @@ function Sponsorships({ sponsorships, saveSponsorship, removeSponsorship, dateRa
           </motion.div>
         )}
       </AnimatePresence>
-      <AnimatePresence>
-        {editingMember && (
-          <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          >
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setEditingMember(null)} />
-            <motion.div
-              className="relative bg-white dark:bg-rotary-navy-light rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100 dark:border-white/10"
-              initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-            >
-              <h3 className="font-display font-bold text-lg mb-0.5">Edit Payment</h3>
-              <p className="text-sm text-gray-400 dark:text-white/40 mb-5">
-                {editingMember.name} · Due: ₹{(editingMember.annualDue || 0).toLocaleString()}
-              </p>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Amount Paid (₹)</label>
-                  <input
-                    className={inputClass}
-                    type="number"
-                    min="0"
-                    max={editingMember.annualDue}
-                    value={editForm.paid || ''}
-                    onChange={e => setEditForm({ ...editForm, paid: parseInt(e.target.value) || 0 })}
-                  />
-                  {editForm.paid > 0 && editForm.paid < editingMember.annualDue && (
-                    <p className="text-xs text-amber-500 mt-1">
-                      Partial — ₹{(editingMember.annualDue - editForm.paid).toLocaleString()} still pending
-                    </p>
-                  )}
-                  {editForm.paid >= editingMember.annualDue && editingMember.annualDue > 0 && (
-                    <p className="text-xs text-green-600 mt-1">✓ Fully paid</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Payment Date</label>
-                  <input
-                    className={inputClass}
-                    type="date"
-                    value={editForm.paymentDate}
-                    onChange={e => setEditForm({ ...editForm, paymentDate: e.target.value })}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Note</label>
-                  <input
-                    className={inputClass}
-                    placeholder="e.g. Paid via UPI, cash, etc."
-                    value={editForm.note}
-                    onChange={e => setEditForm({ ...editForm, note: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setEditingMember(null)}
-                  className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-white/10 text-sm font-semibold hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={async () => {
-                    await saveMember({ ...editingMember, ...editForm })
-                    setEditingMember(null)
-                  }}
-                  className="flex-1 py-2.5 rounded-xl bg-rotary-blue text-white text-sm font-semibold hover:bg-rotary-blue/90 transition-colors"
-                >
-                  Save
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   )
 }
-
 
 // ── Balance Sheet ──
 function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} }) {
@@ -1131,7 +1092,6 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Income panel */}
         <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 dark:border-white/5 flex items-center justify-between">
             <h3 className="font-display font-semibold flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />Income</h3>
@@ -1171,7 +1131,6 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
           )}
         </div>
 
-        {/* Expenses panel */}
         <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 dark:border-white/5 flex items-center justify-between">
             <h3 className="font-display font-semibold flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Expenses</h3>
@@ -1284,18 +1243,10 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#d4006d] animate-pulse" />
-                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#d4006d]">
-                  Treasurer Dashboard
-                </p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#d4006d]">Treasurer Dashboard</p>
               </div>
-
-              <h2 className="font-display font-extrabold text-3xl md:text-4xl text-rotary-charcoal dark:text-white">
-                Treasurer Report
-              </h2>
-
-              <p className="text-sm text-gray-400 dark:text-white/40 mt-1.5">
-                Rotaract Club · Bengaluru BTM
-              </p>
+              <h2 className="font-display font-extrabold text-3xl md:text-4xl text-rotary-charcoal dark:text-white">Treasurer Report</h2>
+              <p className="text-sm text-gray-400 dark:text-white/40 mt-1.5">Rotaract Club · Bengaluru BTM</p>
             </div>
           </div>
         </motion.div>
@@ -1360,7 +1311,6 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
           </>
         )}
       </div>
-    </div >
-
+    </div>
   )
 }

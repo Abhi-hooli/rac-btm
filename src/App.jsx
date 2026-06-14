@@ -4,8 +4,10 @@ import IntroAnimation from './components/intro/IntroAnimation'
 import Navbar from './components/layout/Navbar'
 import ScrollProgress from './components/ui/ScrollProgress'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import AdminLogin from "./components/ui/AdminLogin";
+import { getAuth, onAuthStateChanged } from 'firebase/auth'
 import UserManagement from "./components/sections/UserManagement";
+import { logAction } from './utils/auditLog'
+
 
 const Blog = lazy(() => import('./components/sections/Blog'))
 const Hero = lazy(() => import('./components/sections/Hero'))
@@ -40,14 +42,63 @@ const SectionLoader = () => (
 export default function App() {
   const [showIntro, setShowIntro] = useState(true)
   const [isDark, setIsDark] = useState(false)
-  const [isAdmin, setIsAdmin] = useState(() => sessionStorage.getItem('isAdmin') === 'true')
-  const [permissions, setPermissions] = useState(() => {
-    const saved = sessionStorage.getItem('adminPerms')
-    return saved ? JSON.parse(saved) : null
-  })
+const [isAdmin, setIsAdmin] = useState(false)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [permissions, setPermissions] = useState(null)
   const [currentPage, setCurrentPage] = useState('home')
   const [momLinkedMeeting, setMomLinkedMeeting] = useState(null)
 
+useEffect(() => {
+    const auth = getAuth()
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        const saved = sessionStorage.getItem('adminPerms')
+        if (saved) {
+          setIsAdmin(true)
+          setPermissions(JSON.parse(saved))
+        }
+      } else {
+        setIsAdmin(false)
+        setPermissions(null)
+        sessionStorage.removeItem('adminPerms')
+        sessionStorage.removeItem('adminLoginTime')
+      }
+      setAuthChecked(true)
+    })
+    return () => unsub()
+  }, [])
+
+  // ── Auto-logout after 8 hours ──
+  useEffect(() => {
+    if (!isAdmin) return
+    const loginTime = sessionStorage.getItem('adminLoginTime')
+    if (!loginTime) {
+      sessionStorage.setItem('adminLoginTime', Date.now().toString())
+      return
+    }
+    const elapsed = Date.now() - parseInt(loginTime)
+    const sessionLimit = 0.5 * 60 * 60 * 1000
+    if (elapsed >= sessionLimit) {
+      // Session expired — force logout
+      getAuth().signOut()
+      setIsAdmin(false)
+      setPermissions(null)
+      sessionStorage.clear()
+      goToPage('home')
+      return
+    }
+    // Set timer for remaining time
+    const remaining = sessionLimit - elapsed
+    const timer = setTimeout(() => {
+      getAuth().signOut()
+      setIsAdmin(false)
+      setPermissions(null)
+      sessionStorage.clear()
+      goToPage('home')
+      alert('Your admin session has expired after 30 minutes. Please log in again.')
+    }, remaining)
+    return () => clearTimeout(timer)
+  }, [isAdmin])
   useEffect(() => {
     // Force light mode
     document.documentElement.classList.remove('dark')
@@ -122,7 +173,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {!showIntro && (
+      {!showIntro && authChecked && (
         <>
           <ScrollProgress />
           <Navbar
@@ -134,11 +185,27 @@ export default function App() {
               setIsAdmin(true)
               setPermissions(perms)
               sessionStorage.setItem('adminPerms', JSON.stringify(perms))
+              sessionStorage.setItem('adminLoginTime', Date.now().toString())
+              logAction({
+                admin:   perms?.email || 'admin',
+                action:  'LOGIN',
+                module:  'Auth',
+                item:    'Admin Session',
+                details: `Logged in at ${new Date().toLocaleString('en-IN')}`,
+              })
             }}
-            onLogout={() => {
+            onLogout={async () => {
+              logAction({
+                admin:   permissions?.email || 'admin',
+                action:  'LOGOUT',
+                module:  'Auth',
+                item:    'Admin Session',
+                details: `Logged out at ${new Date().toLocaleString('en-IN')}`,
+              })
               setIsAdmin(false)
               setPermissions(null)
               sessionStorage.removeItem('adminPerms')
+              sessionStorage.removeItem('isAdmin')
             }}
             onLogoClick={() => goToPage('home')}
             onTreasurer={() => goToPage('treasurer')}
@@ -212,6 +279,7 @@ export default function App() {
               )}
 
               {/* ── Treasurer ── */}
+              {currentPage === 'treasurer' && !permissions?.treasurer && goToPage('home')}
               {currentPage === 'treasurer' && permissions?.treasurer && (
                 <>
                   <TreasurerDashboard isAdmin={isAdmin} onBack={() => goToPage('home')} />
@@ -219,6 +287,7 @@ export default function App() {
                 </>
               )}
 
+              {currentPage === 'attendance' && !permissions?.attendance && goToPage('home')}
               {/* ── Attendance Tracker ── */}
               {currentPage === 'attendance' && permissions?.attendance && (
                 <>
@@ -234,6 +303,7 @@ export default function App() {
                 </>
               )}
 
+              {currentPage === 'mom' && !permissions?.mom && goToPage('home')}
               {/* ── MoM Tracker ── */}
               {currentPage === 'mom' && permissions?.mom && (
                 <>
@@ -254,6 +324,7 @@ export default function App() {
                 </>
               )}
 
+              {currentPage === 'analytics' && !permissions?.analytics && goToPage('home')}
               {/* ── Analytics ── */}
               {currentPage === 'analytics' && permissions?.analytics && (
                 <>
@@ -276,6 +347,7 @@ export default function App() {
                 </>
               )}
 
+              {currentPage === 'users' && !permissions?.userManagement && goToPage('home')}
               {/* ── User Management ── */}
               {currentPage === 'users' && permissions?.userManagement && (
                 <>
@@ -284,6 +356,7 @@ export default function App() {
                 </>
               )}
 
+              {currentPage === 'rsvpAdmin' && !permissions?.rsvp && goToPage('home')}
               {/* ── RSVP Admin ── */}
               {currentPage === 'rsvpAdmin' && permissions?.rsvp && (
                 <>
@@ -300,8 +373,9 @@ export default function App() {
                 </>
               )}
 
+              {currentPage === 'newsletter' && !isAdmin && goToPage('home')}
               {/* ── News Letter ── */}
-              {currentPage === 'newsletter' && (
+              {currentPage === 'newsletter' && isAdmin && (
                 <>
                   <NewsletterGenerator isAdmin={isAdmin} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />

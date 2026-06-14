@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useCollection } from '../../hooks/useFirestore'
+import { logAction } from '../../utils/auditLog'
 
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 
@@ -358,14 +359,18 @@ export default function Blog({ isAdmin, onBack }) {
 
     const handleSave = async (data) => {
         await save({ ...data, id: data.id || Date.now().toString(), createdAt: data.createdAt || new Date().toISOString() })
+        logAction({ admin: 'admin', action: data.published ? 'PUBLISH' : 'DRAFT', module: 'Blog', item: data.title, details: `Blog post ${data.published ? 'published' : 'saved as draft'}` })
         setShowEditor(false)
         setEditingPost(null)
     }
 
     const handleDelete = async (id) => {
-        if (confirm('Delete this post permanently?')) await remove(id)
+        if (confirm('Delete this post permanently?')) {
+            const postTitle = allPosts.find(p => p.id === id)?.title || id
+            await remove(id)
+            logAction({ admin: 'admin', action: 'DELETE', module: 'Blog', item: postTitle, details: 'Blog post deleted' })
+        }
     }
-
     const handleEdit = (post) => {
         setEditingPost(post)
         setShowEditor(true)
