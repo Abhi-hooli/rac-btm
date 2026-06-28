@@ -14,11 +14,12 @@ const navLinks = [
   { name: 'Blog', href: '#', isPage: true, pageKey: 'blog' },
 ]
 
-export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onContact, onMom, onRsvpAdmin, onUserManagement, onBlog, onNewsletter, currentPage }) {
+export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onContact, onMom, onRsvpAdmin, onUserManagement, onBlog, onNewsletter, currentPage, maintenanceMode, onToggleMaintenance }) {
   const [isScrolled, setIsScrolled] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
   const [adminDropdownOpen, setAdminDropdownOpen] = useState(false)
+  const [showMaintenanceConfirm, setShowMaintenanceConfirm] = useState(false)
   const dropdownRef = useRef(null)
 
   useEffect(() => {
@@ -229,6 +230,31 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                         </button>
                       )}
 
+                      {/* Maintenance Mode — super admin only */}
+                      {permissions?.userManagement && (
+                        <>
+                          <div className="mx-3 border-t border-gray-100" />
+                          <button
+                            onClick={() => { setAdminDropdownOpen(false); setShowMaintenanceConfirm(true) }}
+                            className={`flex items-center gap-3 w-full px-4 py-3 text-sm font-medium transition-colors ${
+                              maintenanceMode
+                                ? 'text-orange-600 hover:bg-orange-50'
+                                : 'text-rotary-charcoal hover:bg-orange-50 hover:text-orange-600'
+                            }`}
+                          >
+                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${maintenanceMode ? 'bg-orange-100' : 'bg-orange-50'}`}>
+                              <svg className="w-3.5 h-3.5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                              </svg>
+                            </div>
+                            <span className="flex-1 text-left">Maintenance Mode</span>
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${maintenanceMode ? 'bg-orange-100 text-orange-600' : 'bg-gray-100 text-gray-400'}`}>
+                              {maintenanceMode ? 'ON' : 'OFF'}
+                            </span>
+                          </button>
+                        </>
+                      )}
+
                       {/* Sign Out */}
                       <button
                         onClick={async () => { setAdminDropdownOpen(false); await firebaseAdminLogout(); onLogout() }}
@@ -405,6 +431,58 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
       </AnimatePresence>
 
       <AdminLogin isOpen={showLogin} onClose={() => setShowLogin(false)} onLogin={onLogin} />
+
+      {/* Maintenance Mode Confirm Modal */}
+      <AnimatePresence>
+        {showMaintenanceConfirm && (
+          <motion.div
+            className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl"
+              initial={{ scale: 0.92, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 10 }}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center shrink-0">
+                  <svg className="w-5 h-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base">
+                    {maintenanceMode ? 'Disable Maintenance Mode?' : 'Enable Maintenance Mode?'}
+                  </h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Super Admin action</p>
+                </div>
+              </div>
+              <p className="text-sm text-gray-600 mb-6">
+                {maintenanceMode
+                  ? 'The site will become publicly visible again. All visitors will be able to access it.'
+                  : 'All visitors (except admins) will see a maintenance page and cannot access the site.'}
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { onToggleMaintenance?.(); setShowMaintenanceConfirm(false) }}
+                  className={`flex-1 py-2.5 rounded-xl font-semibold text-sm transition-colors ${
+                    maintenanceMode
+                      ? 'bg-green-500 hover:bg-green-600 text-white'
+                      : 'bg-orange-500 hover:bg-orange-600 text-white'
+                  }`}
+                >
+                  {maintenanceMode ? 'Go Live' : 'Enable'}
+                </button>
+                <button
+                  onClick={() => setShowMaintenanceConfirm(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   )
 }

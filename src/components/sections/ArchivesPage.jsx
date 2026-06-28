@@ -141,7 +141,7 @@ function YearForm({ onSave, onCancel, existing }) {
         <div className="flex gap-2 mb-2">
           <input
             className={inputClass}
-            placeholder="e.g. Best Club Award — RID 3191"
+            placeholder="e.g. Best Club Award — R.I.Dist 3191"
             value={awardInput}
             onChange={e => setAwardInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addAward()}
@@ -200,7 +200,6 @@ function YearForm({ onSave, onCancel, existing }) {
 
 // ── Main Archives Page ──
 export default function ArchivesPage({ isAdmin, onBack }) {
-    console.log('Archives Page Loaded')
   const { data: archives, loading, save, remove } = useCollection('archives')
   const [selectedYear, setSelectedYear] = useState(null)
   const [showForm, setShowForm] = useState(false)

@@ -1,0 +1,20 @@
+User-agent: *
+Allow: /
+Allow: /projects
+Allow: /team
+Allow: /calendar
+Allow: /archives
+Allow: /contact
+Allow: /blog
+Allow: /gallery
+
+Disallow: /treasurer
+Disallow: /attendance
+Disallow: /mom
+Disallow: /rsvp-admin
+Disallow: /analytics
+Disallow: /documents
+Disallow: /users
+Disallow: /newsletter
+
+Sitemap: https://rotaract.btm.org.in/sitemap.xml

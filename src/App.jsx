@@ -3,10 +3,12 @@ import { AnimatePresence } from 'framer-motion'
 import IntroAnimation from './components/intro/IntroAnimation'
 import Navbar from './components/layout/Navbar'
 import ScrollProgress from './components/ui/ScrollProgress'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { getAuth, onAuthStateChanged } from 'firebase/auth'
 import UserManagement from "./components/sections/UserManagement";
 import { logAction } from './utils/auditLog'
+import { useSEO } from './hooks/useSEO'
+import MaintenancePage from './components/sections/MaintenancePage'
+import { useDocument } from './hooks/useFirestore'
 
 
 
@@ -50,6 +52,21 @@ const [isAdmin, setIsAdmin] = useState(false)
   const [permissions, setPermissions] = useState(null)
   const [currentPage, setCurrentPage] = useState('home')
   const [momLinkedMeeting, setMomLinkedMeeting] = useState(null)
+  const { data: siteSettings, save: saveSiteSettings } = useDocument('settings', 'site', { maintenanceMode: false })
+
+  useSEO(currentPage)
+
+  const toggleMaintenance = async () => {
+    const next = !siteSettings.maintenanceMode
+    await saveSiteSettings({ ...siteSettings, maintenanceMode: next })
+    logAction({
+      admin: permissions?.email || 'admin',
+      action: next ? 'MAINTENANCE_ON' : 'MAINTENANCE_OFF',
+      module: 'Settings',
+      item: 'Site',
+      details: `Maintenance mode ${next ? 'enabled' : 'disabled'}`,
+    })
+  }
 
 useEffect(() => {
     const auth = getAuth()
@@ -177,7 +194,11 @@ useEffect(() => {
         )}
       </AnimatePresence>
 
-      {!showIntro && authChecked && (
+      {!showIntro && authChecked && siteSettings.maintenanceMode && !isAdmin && (
+        <MaintenancePage />
+      )}
+
+      {!showIntro && authChecked && (!siteSettings.maintenanceMode || isAdmin) && (
         <>
           <ScrollProgress />
           <Navbar
@@ -185,6 +206,8 @@ useEffect(() => {
             isAdmin={isAdmin}
             permissions={permissions}
             currentPage={currentPage}
+            maintenanceMode={siteSettings.maintenanceMode}
+            onToggleMaintenance={toggleMaintenance}
             onLogin={(perms) => {
               setIsAdmin(true)
               setPermissions(perms)
@@ -233,7 +256,7 @@ useEffect(() => {
               {currentPage === 'home' && (
                 <>
                   <Hero setCurrentPage={goToPage} isAdmin={isAdmin} />
-                  <About />
+                  <About isAdmin={isAdmin} />
                   <Impact isAdmin={isAdmin} />
                   <Projects
                     onViewAll={() => goToPage('allProjects')}
