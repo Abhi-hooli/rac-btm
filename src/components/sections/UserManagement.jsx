@@ -52,7 +52,6 @@ export default function UserManagement({ onBack }) {
   const [createdUser, setCreatedUser] = useState(null) // {email, password} shown once after creation
   const [copied, setCopied] = useState(false)
   const [emailSent, setEmailSent] = useState(false)
-  const [revealId, setRevealId] = useState(null) // which user's password is visible
 
   const loadUsers = async () => {
     setLoading(true)
@@ -92,7 +91,6 @@ export default function UserManagement({ onBack }) {
     await addDoc(collection(db, 'users'), {
       email,
       name: newName.trim(),
-      initialPassword: newPassword,
       role: ROLE_PRESETS[newRole].label,
       permissions: { ...ROLE_PRESETS[newRole].perms },
       createdAt: new Date().toISOString()
@@ -234,18 +232,6 @@ export default function UserManagement({ onBack }) {
                       <p className="text-sm text-gray-500 dark:text-white/50">
                         {user.email} · {user.role || '—'}
                       </p>
-                      {user.initialPassword && (
-                        <p className="text-xs text-gray-400 dark:text-white/40 mt-0.5 font-mono">
-                          Password:{' '}
-                          {revealId === user.id ? user.initialPassword : '••••••••'}
-                          <button
-                            onClick={() => setRevealId(revealId === user.id ? null : user.id)}
-                            className="ml-2 text-rotary-blue underline"
-                          >
-                            {revealId === user.id ? 'hide' : 'show'}
-                          </button>
-                        </p>
-                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <select

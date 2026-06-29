@@ -285,7 +285,7 @@ function AdminRSVPPanel({ event, rsvps, onClose }) {
   const exportCSV = () => {
     const headers = ['Name','Email','Phone','Guests','Dietary Notes','RSVP Date']
     const rows = eventRsvps.map(r => [r.name, r.email, r.phone||'', r.guests||1, r.dietaryNotes||'', new Date(r.rsvpedAt).toLocaleString('en-IN')])
-    const csv = [headers,...rows].map(row => row.map(v => `"${v}"`).join(',')).join('\n')
+    const csv = [headers,...rows].map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob([csv],{type:'text/csv'}); const url = URL.createObjectURL(blob)
     const a = document.createElement('a'); a.href=url; a.download=`rsvp_${event.title.replace(/\s+/g,'_')}_${event.date}.csv`; a.click(); URL.revokeObjectURL(url)
   }
@@ -302,11 +302,11 @@ function AdminRSVPPanel({ event, rsvps, onClose }) {
             </button>
           </div>
           <p className="text-sm text-rotary-slate dark:text-white/50 mb-4 truncate">{event.title}</p>
-          <div className="grid grid-cols-3 gap-3">
-            {[{label:'RSVPs',value:eventRsvps.length,color:'text-rotary-blue'},{label:'Total Attendees',value:totalAttendees,color:'text-rotary-gold'},{label:'Avg. Group Size',value:eventRsvps.length?(totalAttendees/eventRsvps.length).toFixed(1):'0',color:'text-green-500'}].map(stat => (
-              <div key={stat.label} className="bg-gray-50 dark:bg-white/[0.04] rounded-xl p-3 text-center border border-gray-100 dark:border-white/5">
-                <p className={`font-display font-bold text-2xl ${stat.color}`}>{stat.value}</p>
-                <p className="text-[11px] text-rotary-slate dark:text-white/40 mt-0.5">{stat.label}</p>
+          <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
+            {[{label:'RSVPs',value:eventRsvps.length,color:'text-rotary-blue'},{label:'Attendees',value:totalAttendees,color:'text-rotary-gold'},{label:'Avg. Size',value:eventRsvps.length?(totalAttendees/eventRsvps.length).toFixed(1):'0',color:'text-green-500'}].map(stat => (
+              <div key={stat.label} className="bg-gray-50 dark:bg-white/[0.04] rounded-xl p-2 sm:p-3 text-center border border-gray-100 dark:border-white/5">
+                <p className={`font-display font-bold text-xl sm:text-2xl ${stat.color}`}>{stat.value}</p>
+                <p className="text-[10px] sm:text-[11px] text-rotary-slate dark:text-white/40 mt-0.5 leading-tight">{stat.label}</p>
               </div>
             ))}
           </div>

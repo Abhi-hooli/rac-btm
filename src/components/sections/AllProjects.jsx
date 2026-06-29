@@ -229,7 +229,7 @@ function exportToPDF(projects, dateRange) {
     }).join('')}
   </tbody>
 </table>
-<div class="footer">Rotaract Club of Bengaluru BTM — RID 3191 — Create. Lead. Inspire.</div>
+<div class="footer">Rotaract Club of Bengaluru BTM — R.I.Dist 3191 — Create. Lead. Inspire.</div>
 </body></html>`
 
   const w = window.open('', '_blank')

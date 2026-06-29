@@ -27,9 +27,9 @@ export async function firebaseAdminLogin(email, password) {
   }
   const userData = snap.docs[0].data()
   if (userData.isSuperAdmin) {
-    return { user: result.user, permissions: ALL_PERMS }
+    return { user: result.user, permissions: { ...ALL_PERMS, isSuperAdmin: true, email: result.user.email } }
   }
-  return { user: result.user, permissions: userData.permissions || {} }
+  return { user: result.user, permissions: { ...(userData.permissions || {}), email: result.user.email } }
 }
 
 export async function createAuthUser(email, password) {

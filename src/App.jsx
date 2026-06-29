@@ -36,6 +36,7 @@ const ArchivesPage = lazy(() => import('./components/sections/ArchivesPage'))
 const NewsletterGenerator = lazy(() => import('./components/sections/NewsletterGenerator'))
 const Gallery = lazy(() => import('./components/sections/Gallery'))
 const GalleryPreview = lazy(() => import('./components/sections/GalleryPreview'))
+const PrivacyPolicy = lazy(() => import('./components/sections/PolicyPage'))
 
 
 const SectionLoader = () => (
@@ -56,15 +57,19 @@ const [isAdmin, setIsAdmin] = useState(false)
 
   useSEO(currentPage)
 
-  const toggleMaintenance = async () => {
+  const toggleMaintenance = async (resumeAt = null) => {
     const next = !siteSettings.maintenanceMode
-    await saveSiteSettings({ ...siteSettings, maintenanceMode: next })
+    await saveSiteSettings({
+      ...siteSettings,
+      maintenanceMode: next,
+      maintenanceEndTime: next ? (resumeAt || null) : null,
+    })
     logAction({
       admin: permissions?.email || 'admin',
       action: next ? 'MAINTENANCE_ON' : 'MAINTENANCE_OFF',
       module: 'Settings',
       item: 'Site',
-      details: `Maintenance mode ${next ? 'enabled' : 'disabled'}`,
+      details: `Maintenance mode ${next ? 'enabled' : 'disabled'}${resumeAt ? ` — resume at ${new Date(resumeAt).toLocaleString('en-IN')}` : ''}`,
     })
   }
 
@@ -88,7 +93,7 @@ useEffect(() => {
     return () => unsub()
   }, [])
 
-  // ── Auto-logout after 8 hours ──
+  // ── Auto-logout after 30 minutes ──
   useEffect(() => {
     if (!isAdmin) return
     const loginTime = sessionStorage.getItem('adminLoginTime')
@@ -144,6 +149,7 @@ useEffect(() => {
         '/blog': 'blog',
         '/newsletter': 'newsletter',
         '/gallery': 'gallery',
+        '/privacy': 'privacy',
       }
       const page = pathMap[path]
       if (page) setCurrentPage(page)
@@ -173,6 +179,7 @@ useEffect(() => {
       blog: '/blog',
       newsletter: '/newsletter',
       gallery: '/gallery',
+      privacy: '/privacy',
     }
 
     window.history.pushState({}, '', routes[page] || '/')
@@ -195,7 +202,19 @@ useEffect(() => {
       </AnimatePresence>
 
       {!showIntro && authChecked && siteSettings.maintenanceMode && !isAdmin && (
-        <MaintenancePage />
+        <MaintenancePage resumeAt={siteSettings.maintenanceEndTime || null} onLogin={(perms) => {
+          setIsAdmin(true)
+          setPermissions(perms)
+          sessionStorage.setItem('adminPerms', JSON.stringify(perms))
+          sessionStorage.setItem('adminLoginTime', Date.now().toString())
+          logAction({
+            admin:   perms?.email || 'admin',
+            action:  'LOGIN',
+            module:  'Auth',
+            item:    'Admin Session',
+            details: `Logged in via maintenance page at ${new Date().toLocaleString('en-IN')}`,
+          })
+        }} />
       )}
 
       {!showIntro && authChecked && (!siteSettings.maintenanceMode || isAdmin) && (
@@ -229,10 +248,11 @@ useEffect(() => {
                 item:    'Admin Session',
                 details: `Logged out at ${new Date().toLocaleString('en-IN')}`,
               })
+              await getAuth().signOut()
               setIsAdmin(false)
               setPermissions(null)
               sessionStorage.removeItem('adminPerms')
-              sessionStorage.removeItem('isAdmin')
+              sessionStorage.removeItem('adminLoginTime')
             }}
             onLogoClick={() => goToPage('home')}
             onTreasurer={() => goToPage('treasurer')}
@@ -416,7 +436,14 @@ useEffect(() => {
                   <NewsletterGenerator isAdmin={isAdmin} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
-                
+              )}
+
+              {/* ── Privacy Policy ── */}
+              {currentPage === 'privacy' && (
+                <>
+                  <PrivacyPolicy onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
               )}
 
             </Suspense>

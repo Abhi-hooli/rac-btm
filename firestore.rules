@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Public read-only collections ──────────────────────────────────────
+    match /projects/{doc}    { allow read: if true; allow write: if request.auth != null; }
+    match /events/{doc}      { allow read: if true; allow write: if request.auth != null; }
+    match /leaders/{doc}     { allow read: if true; allow write: if request.auth != null; }
+    match /gallery/{doc}     { allow read: if true; allow write: if request.auth != null; }
+    match /testimonials/{doc}{ allow read: if true; allow write: if request.auth != null; }
+    match /blogs/{doc}       { allow read: if true; allow write: if request.auth != null; }
+    match /settings/{doc}    { allow read: if true; allow write: if request.auth != null; }
+    match /partners/{doc}    { allow read: if true; allow write: if request.auth != null; }
+    match /impact/{doc}      { allow read: if true; allow write: if request.auth != null; }
+
+    // ── RSVP — public write (anyone can RSVP), admin read ────────────────
+    match /rsvps/{doc} {
+      allow read:  if request.auth != null;
+      allow create: if request.resource.data.name is string
+                    && request.resource.data.email is string
+                    && request.resource.data.email.size() <= 254;
+      allow update, delete: if request.auth != null;
+    }
+
+    // ── Newsletter subscribers — public create, admin read/delete ────────
+    match /subscribers/{doc} {
+      allow create: if request.resource.data.email is string
+                    && request.resource.data.email.size() <= 254;
+      allow read, update, delete: if request.auth != null;
+    }
+
+    // ── Contact form — public create, admin read ──────────────────────────
+    match /contacts/{doc} {
+      allow create: if request.resource.data.name is string
+                    && request.resource.data.email is string;
+      allow read, update, delete: if request.auth != null;
+    }
+
+    // ── Admin-only collections ────────────────────────────────────────────
+    match /users/{doc}        { allow read, write: if request.auth != null; }
+    match /attendance/{doc}   { allow read, write: if request.auth != null; }
+    match /treasury/{doc}     { allow read, write: if request.auth != null; }
+    match /mom/{doc}          { allow read, write: if request.auth != null; }
+    match /auditLog/{doc}     { allow read, write: if request.auth != null; }
+
+    // ── Deny everything else ──────────────────────────────────────────────
+    match /{document=**} { allow read, write: if false; }
+  }
+}

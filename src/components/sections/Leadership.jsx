@@ -191,7 +191,7 @@ export default function Leadership({ onViewTeam, isAdmin }) {
         {/* President's Message — admin can edit inline */}
         <PresidentCard isAdmin={isAdmin} />
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-8">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 lg:gap-8">
           {featured.map((leader, i) => (
             <LeaderCard key={leader.id} leader={leader} i={i} />
           ))}

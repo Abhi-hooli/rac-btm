@@ -346,9 +346,10 @@ export default function CalendarPage({ onBack, isAdmin }) {
             </div>
 
             {/* Grid */}
-            <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+            <div className="overflow-x-auto rounded-xl border border-gray-100 dark:border-white/5">
+            <div className="bg-white dark:bg-rotary-navy-light rounded-xl overflow-hidden min-w-[336px]">
               <div className="grid grid-cols-7 border-b border-gray-100 dark:border-white/5">
-                {DAYS.map(d => <div key={d} className="text-center text-xs font-semibold uppercase tracking-wider text-rotary-slate dark:text-white/40 py-3">{d}</div>)}
+                {DAYS.map(d => <div key={d} className="text-center text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-rotary-slate dark:text-white/40 py-3">{d}</div>)}
               </div>
               <div className="grid grid-cols-7">
                 {days.map((cell, idx) => {
@@ -370,6 +371,7 @@ export default function CalendarPage({ onBack, isAdmin }) {
                   )
                 })}
               </div>
+            </div>
             </div>
 
             {/* Selected Day Panel */}

@@ -20,6 +20,8 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
   const [showLogin, setShowLogin] = useState(false)
   const [adminDropdownOpen, setAdminDropdownOpen] = useState(false)
   const [showMaintenanceConfirm, setShowMaintenanceConfirm] = useState(false)
+  const [timerOption, setTimerOption] = useState('none')
+  const [customDateTime, setCustomDateTime] = useState('')
   const dropdownRef = useRef(null)
 
   useEffect(() => {
@@ -456,14 +458,78 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                   <p className="text-xs text-gray-400 mt-0.5">Super Admin action</p>
                 </div>
               </div>
-              <p className="text-sm text-gray-600 mb-6">
+
+              <p className="text-sm text-gray-600 mb-4">
                 {maintenanceMode
                   ? 'The site will become publicly visible again. All visitors will be able to access it.'
                   : 'All visitors (except admins) will see a maintenance page and cannot access the site.'}
               </p>
+
+              {/* Countdown timer picker — only when enabling, only for super admin */}
+              {!maintenanceMode && permissions?.isSuperAdmin && (
+                <div className="mb-5 p-4 bg-orange-50 rounded-xl border border-orange-100">
+                  <div className="flex items-center gap-2 mb-3">
+                    <svg className="w-4 h-4 text-orange-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-xs font-semibold text-orange-700">Set countdown timer for visitors</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-3">
+                    {[
+                      { label: 'No timer', value: 'none' },
+                      { label: '30 min', value: '30m' },
+                      { label: '1 hour', value: '1h' },
+                      { label: '2 hours', value: '2h' },
+                      { label: '4 hours', value: '4h' },
+                      { label: 'Custom', value: 'custom' },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setTimerOption(opt.value)}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${
+                          timerOption === opt.value
+                            ? 'bg-orange-500 text-white'
+                            : 'bg-white border border-orange-200 text-orange-700 hover:bg-orange-100'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  {timerOption === 'custom' && (
+                    <input
+                      type="datetime-local"
+                      value={customDateTime}
+                      min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                      onChange={e => setCustomDateTime(e.target.value)}
+                      className="w-full text-xs px-3 py-2 rounded-lg border border-orange-200 bg-white text-gray-700 focus:outline-none focus:border-orange-400"
+                    />
+                  )}
+                  {timerOption !== 'none' && timerOption !== 'custom' && (
+                    <p className="text-xs text-orange-600 mt-1">
+                      Visitors will see a countdown showing when the site returns.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="flex gap-3">
                 <button
-                  onClick={() => { onToggleMaintenance?.(); setShowMaintenanceConfirm(false) }}
+                  onClick={() => {
+                    let resumeAt = null
+                    if (!maintenanceMode && permissions?.isSuperAdmin && timerOption !== 'none') {
+                      if (timerOption === '30m') resumeAt = Date.now() + 30 * 60 * 1000
+                      else if (timerOption === '1h') resumeAt = Date.now() + 60 * 60 * 1000
+                      else if (timerOption === '2h') resumeAt = Date.now() + 2 * 60 * 60 * 1000
+                      else if (timerOption === '4h') resumeAt = Date.now() + 4 * 60 * 60 * 1000
+                      else if (timerOption === 'custom' && customDateTime) resumeAt = new Date(customDateTime).getTime()
+                    }
+                    onToggleMaintenance?.(resumeAt)
+                    setShowMaintenanceConfirm(false)
+                    setTimerOption('none')
+                    setCustomDateTime('')
+                  }}
                   className={`flex-1 py-2.5 rounded-xl font-semibold text-sm transition-colors ${
                     maintenanceMode
                       ? 'bg-green-500 hover:bg-green-600 text-white'
@@ -473,7 +539,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                   {maintenanceMode ? 'Go Live' : 'Enable'}
                 </button>
                 <button
-                  onClick={() => setShowMaintenanceConfirm(false)}
+                  onClick={() => { setShowMaintenanceConfirm(false); setTimerOption('none'); setCustomDateTime('') }}
                   className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm hover:bg-gray-50 transition-colors"
                 >
                   Cancel

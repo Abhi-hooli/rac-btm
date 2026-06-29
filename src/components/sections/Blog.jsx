@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useCollection } from '../../hooks/useFirestore'
 import { logAction } from '../../utils/auditLog'
+import { db } from '../../firebase'
+import { collection, getDocs, orderBy, query, deleteDoc, doc } from 'firebase/firestore'
 
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 
@@ -332,6 +334,142 @@ function BlogCard({ post, onClick, onEdit, onDelete, isAdmin }) {
 }
 
 // ── Main Blog Page ────────────────────────────────────────────────────────────
+function SubscriberPanel() {
+    const [open, setOpen] = useState(false)
+    const [subs, setSubs] = useState([])
+    const [loading, setLoading] = useState(false)
+    const [deletingId, setDeletingId] = useState(null)
+    const [search, setSearch] = useState('')
+
+    const load = async () => {
+        setLoading(true)
+        try {
+            const snap = await getDocs(query(collection(db, 'subscribers'), orderBy('subscribedAt', 'desc')))
+            setSubs(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    useEffect(() => { if (open) load() }, [open])
+
+    const exportCSV = () => {
+        const rows = [['Email', 'Subscribed At'], ...subs.map(s => [s.email, s.subscribedAt?.toDate?.()?.toLocaleString('en-IN') || ''])]
+        const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+        a.download = `subscribers-${new Date().toISOString().slice(0, 10)}.csv`
+        a.click()
+    }
+
+    const handleDelete = async (id) => {
+        if (!window.confirm('Remove this subscriber?')) return
+        setDeletingId(id)
+        await deleteDoc(doc(db, 'subscribers', id))
+        setSubs(prev => prev.filter(s => s.id !== id))
+        setDeletingId(null)
+    }
+
+    const filtered = subs.filter(s => s.email?.includes(search.toLowerCase()))
+
+    return (
+        <div className="mt-12 border border-gray-100 dark:border-white/10 rounded-2xl overflow-hidden">
+            <button
+                type="button"
+                onClick={() => setOpen(o => !o)}
+                className="w-full flex items-center justify-between px-6 py-4 bg-gray-50 dark:bg-white/[0.03] hover:bg-gray-100 dark:hover:bg-white/[0.06] transition-colors"
+            >
+                <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-rotary-blue/10 flex items-center justify-center">
+                        <svg className="w-4 h-4 text-rotary-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <span className="font-display font-semibold text-sm">
+                        Newsletter Subscribers
+                        {subs.length > 0 && !loading && <span className="ml-2 text-xs font-normal text-rotary-slate dark:text-white/40">({subs.length})</span>}
+                    </span>
+                </div>
+                <svg className={`w-4 h-4 text-rotary-slate dark:text-white/40 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+            </button>
+
+            <AnimatePresence>
+                {open && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.25 }}
+                        className="overflow-hidden"
+                    >
+                        <div className="p-6">
+                            {loading ? (
+                                <div className="flex justify-center py-8">
+                                    <div className="w-8 h-8 border-4 border-rotary-blue/30 border-t-rotary-blue rounded-full animate-spin" />
+                                </div>
+                            ) : subs.length === 0 ? (
+                                <p className="text-center text-rotary-slate dark:text-white/30 text-sm py-8">No subscribers yet.</p>
+                            ) : (
+                                <>
+                                    <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                                        <input
+                                            type="text"
+                                            placeholder="Search emails..."
+                                            value={search}
+                                            onChange={e => setSearch(e.target.value)}
+                                            className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 text-rotary-charcoal dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:border-rotary-blue"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={exportCSV}
+                                            className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-rotary-blue text-white hover:bg-rotary-blue-dark transition-colors whitespace-nowrap"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                            </svg>
+                                            Export CSV
+                                        </button>
+                                    </div>
+                                    <div className="divide-y divide-gray-100 dark:divide-white/5 rounded-xl border border-gray-100 dark:border-white/10 overflow-hidden">
+                                        {filtered.map(s => (
+                                            <div key={s.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
+                                                <div>
+                                                    <p className="text-sm font-medium text-rotary-charcoal dark:text-white">{s.email}</p>
+                                                    {s.subscribedAt && (
+                                                        <p className="text-xs text-rotary-slate dark:text-white/30 mt-0.5">
+                                                            {s.subscribedAt.toDate?.()?.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleDelete(s.id)}
+                                                    disabled={deletingId === s.id}
+                                                    className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-40"
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        ))}
+                                        {filtered.length === 0 && (
+                                            <p className="text-center text-rotary-slate dark:text-white/30 text-sm py-6">No results for "{search}"</p>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-rotary-slate dark:text-white/30 mt-3 text-right">{filtered.length} of {subs.length} subscribers</p>
+                                </>
+                            )}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    )
+}
+
 export default function Blog({ isAdmin, onBack }) {
     const { data: allPosts, loading, save, remove } = useCollection('blogs')
     const [activeCategory, setActiveCategory] = useState('All')
@@ -497,6 +635,9 @@ export default function Blog({ isAdmin, onBack }) {
                         {filtered.length} post{filtered.length !== 1 ? 's' : ''} {activeCategory !== 'All' ? `in ${activeCategory}` : ''}
                     </p>
                 )}
+
+                {/* Subscribers — admin only */}
+                {isAdmin && <SubscriberPanel />}
             </div>
         </div>
     )

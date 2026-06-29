@@ -49,7 +49,7 @@ export default function Hero({ setCurrentPage, isAdmin }) {
           >
             <span className="inline-flex items-center gap-2 px-4 py-2 mb-8 text-sm font-medium bg-white/10 text-white rounded-full border border-white/25 backdrop-blur-sm">
               <span className="w-1.5 h-1.5 rounded-full bg-rotary-blue" />
-              Rotaract Club — RID 3191
+              Rotaract Club — R.I.Dist 3191
             </span>
           </motion.div>
 

@@ -166,7 +166,7 @@ export default function CSR({ onContact }) {
             </div>
 
             {/* Stats row */}
-            <div className="grid grid-cols-3 gap-4 mb-10 p-5 rounded-2xl bg-white dark:bg-white/5 border border-gray-100 dark:border-white/10">
+            <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-10 p-3 sm:p-5 rounded-2xl bg-white dark:bg-white/5 border border-gray-100 dark:border-white/10">
               {[
                 { value: '30+', label: 'Projects delivered' },
                 { value: '2000+', label: 'Lives impacted' },

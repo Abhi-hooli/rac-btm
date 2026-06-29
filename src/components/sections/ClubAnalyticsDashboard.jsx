@@ -34,7 +34,7 @@ function exportToPdf(stats, trend, insights, health, avenueStats = [], monthlySt
   .health-circle{width:60px;height:60px;border-radius:50%;color:#fff;font-size:22px;font-weight:800;display:flex;align-items:center;justify-content:center}
   .ftr{margin-top:28px;padding-top:14px;border-top:1px solid #eaecf4;display:flex;justify-content:space-between;font-size:10px;color:#9ca3af}
 </style></head><body>
-<div class="hdr"><div><h1>Club Analytics Report</h1><p>Rotaract Bengaluru BTM</p><span class="badge">RID 3191</span></div><div style="text-align:right"><p style="font-size:11px;color:#9ca3af">Generated</p><p style="font-weight:700;font-size:12px;color:#1a2236;margin-top:3px">${now}</p></div></div>
+<div class="hdr"><div><h1>Club Analytics Report</h1><p>Rotaract Bengaluru BTM</p><span class="badge">R.I.Dist 3191</span></div><div style="text-align:right"><p style="font-size:11px;color:#9ca3af">Generated</p><p style="font-weight:700;font-size:12px;color:#1a2236;margin-top:3px">${now}</p></div></div>
 <div class="div"></div>
 <div class="grid5">${stats.map(s => `<div class="card"><div class="card-label">${s.label}</div><div class="card-val ${s.accent}">${s.value}</div></div>`).join('')}</div>
 <div class="grid2">

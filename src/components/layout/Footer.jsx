@@ -1,4 +1,7 @@
+import { useState } from 'react'
 import { motion } from 'framer-motion'
+import { db } from '../../firebase'
+import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore'
 
 const footerLinks = {
   'Quick Links': [
@@ -36,6 +39,25 @@ const fourWayTest = [
 ]
 
 export default function Footer({ goToPage }) {
+  const [email, setEmail] = useState('')
+  const [subState, setSubState] = useState('idle') // idle | loading | success | duplicate | error
+
+  const handleSubscribe = async () => {
+    const trimmed = email.trim().toLowerCase()
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return
+    setSubState('loading')
+    try {
+      const q = query(collection(db, 'subscribers'), where('email', '==', trimmed))
+      const snap = await getDocs(q)
+      if (!snap.empty) { setSubState('duplicate'); return }
+      await addDoc(collection(db, 'subscribers'), { email: trimmed, subscribedAt: serverTimestamp() })
+      setEmail('')
+      setSubState('success')
+    } catch {
+      setSubState('error')
+    }
+  }
+
   return (
     <footer className="bg-rotary-navy text-white">
       <div className="max-w-7xl mx-auto section-padding">
@@ -60,12 +82,30 @@ export default function Footer({ goToPage }) {
               <input
                 type="email"
                 placeholder="Your email"
-                className="flex-1 px-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-white text-sm placeholder:text-white/30 focus:outline-none focus:border-rotary-blue transition-colors"
+                value={email}
+                onChange={e => { setEmail(e.target.value); setSubState('idle') }}
+                onKeyDown={e => e.key === 'Enter' && handleSubscribe()}
+                disabled={subState === 'loading' || subState === 'success'}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-white text-sm placeholder:text-white/30 focus:outline-none focus:border-rotary-blue transition-colors disabled:opacity-50"
               />
-              <button className="px-5 py-2.5 bg-rotary-gold text-rotary-navy font-semibold text-sm rounded-lg hover:bg-rotary-gold-light transition-colors">
-                Subscribe
+              <button
+                type="button"
+                onClick={handleSubscribe}
+                disabled={subState === 'loading' || subState === 'success'}
+                className="px-5 py-2.5 bg-rotary-gold text-rotary-navy font-semibold text-sm rounded-lg hover:bg-rotary-gold-light transition-colors disabled:opacity-60"
+              >
+                {subState === 'loading' ? '...' : subState === 'success' ? 'Done ✓' : 'Subscribe'}
               </button>
             </div>
+            {subState === 'success' && (
+              <p className="text-green-400 text-xs mt-2">You're subscribed — thanks!</p>
+            )}
+            {subState === 'duplicate' && (
+              <p className="text-rotary-gold/70 text-xs mt-2">This email is already subscribed.</p>
+            )}
+            {subState === 'error' && (
+              <p className="text-red-400 text-xs mt-2">Something went wrong. Please try again.</p>
+            )}
           </div>
 
           {Object.entries(footerLinks).map(([title, links]) => (
@@ -118,19 +158,30 @@ export default function Footer({ goToPage }) {
         {/* ── Copyright + Social ── */}
         <div className="h-px bg-white/10 mb-5" />
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-white/30 text-xs">
-            © {new Date().getFullYear()} Rotaract Bengaluru BTM. All rights reserved.
-            <span className="mx-2 text-white/15">·</span>
-            Designed by{' '}
-            <a
-              href="https://abhihooli.in"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-rotary-gold/60 hover:text-rotary-gold transition-colors"
+          <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-3 gap-y-1">
+            <p className="text-white/30 text-xs">
+              © {new Date().getFullYear()} Rotaract Bengaluru BTM. All rights reserved.
+            </p>
+            <span className="text-white/15 text-xs">·</span>
+            <button
+              onClick={() => goToPage('privacy')}
+              className="text-white/30 hover:text-rotary-gold text-xs transition-colors"
             >
-              Abhi
-            </a>
-          </p>
+              Privacy Policy
+            </button>
+            <span className="text-white/15 text-xs">·</span>
+            <p className="text-white/30 text-xs">
+              Designed by{' '}
+              <a
+                href="https://abhihooli.in"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-rotary-gold/60 hover:text-rotary-gold transition-colors"
+              >
+                Abhi
+              </a>
+            </p>
+          </div>
           <div className="flex items-center gap-3">
             {socialLinks.map(social => (
               <a

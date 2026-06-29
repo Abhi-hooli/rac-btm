@@ -35,6 +35,7 @@ export function useCollection(collectionName, fallback = [], enabled = true) {
   }, [collectionName, enabled])
 
   const save = async (item) => {
+    if (!item.id) throw new Error(`save() called without id in collection "${collectionName}"`)
     const ref = doc(db, collectionName, item.id)
     await setDoc(ref, item)
   }

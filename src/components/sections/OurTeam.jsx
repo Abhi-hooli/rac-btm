@@ -436,7 +436,7 @@ export default function OurTeam({ isAdmin, onBack }) {
 
         {/* Members Grid */}
         {!loading && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-8">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-8">
             {filtered.map((leader, i) => (
               <div key={leader.id} className="relative group/card">
                 <LeaderCard leader={leader} i={i} />
