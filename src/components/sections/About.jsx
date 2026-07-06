@@ -37,8 +37,8 @@ const inputClass = 'w-full px-3 py-2 rounded-lg bg-gray-100 dark:bg-white/10 bor
 
 const EMPTY_FORM = { year: '', text: '' }
 
-export default function About({ isAdmin }) {
-  const { data: savedMilestones, save, remove } = useCollection('milestones')
+export default function About({ isAdmin, setCurrentPage }) {
+  const { data: savedMilestones, save, remove } = useCollection('milestones', [], { live: isAdmin })
   const [editingId, setEditingId] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [deleteId, setDeleteId] = useState(null)
@@ -137,6 +137,18 @@ export default function About({ isAdmin }) {
                 <p className="text-sm text-gray-600 dark:text-white/60">District</p>
               </div>
             </div>
+
+            {setCurrentPage && (
+              <button
+                onClick={() => setCurrentPage('joinForm')}
+                className="inline-flex items-center gap-2 mt-8 px-6 py-3 rounded-xl bg-rotary-blue text-white font-semibold text-sm hover:bg-rotary-blue-dark transition-colors shadow-sm"
+              >
+                Want to be part of this? Join Rotaract
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                </svg>
+              </button>
+            )}
           </motion.div>
 
           {/* Values Grid */}

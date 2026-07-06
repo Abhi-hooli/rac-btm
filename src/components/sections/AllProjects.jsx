@@ -421,7 +421,7 @@ export default function AllProjects({ isAdmin, onBack }) {
   const sorted = [...filtered].sort((a,b) => (a.order||0)-(b.order||0))
 
   return (
-    <div className="min-h-screen pt-20">
+    <div className="min-h-screen pt-5">
       <div className="section-padding max-w-7xl mx-auto">
 
         {/* Header */}

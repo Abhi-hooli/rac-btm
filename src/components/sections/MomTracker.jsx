@@ -1,10 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import {
-  collection, addDoc, updateDoc, deleteDoc,
-  doc, onSnapshot, serverTimestamp, orderBy, query
-} from 'firebase/firestore'
-import { db } from '../../firebase'
+import { loadFirestore } from '../../firebase'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -21,14 +17,40 @@ const STATUS_COLORS = {
   'Done': 'bg-green-50 text-green-700 border-green-200',
 }
 
+const PRIORITY_COLORS = {
+  'Low': 'bg-gray-50 text-gray-600 border-gray-200',
+  'Medium': 'bg-blue-50 text-blue-700 border-blue-200',
+  'High': 'bg-red-50 text-red-700 border-red-200',
+}
+
+const MEETING_TYPES = ['General Body Meeting', 'Board Meeting', 'Committee Meeting', 'Special Meeting']
+
 const EMPTY_MOM = {
+  meetingNumber: '',
+  meetingType: 'General Body Meeting',
   meetingTitle: '',
   meetingDate: '',
-  nextMeetingDate: '',
+  startTime: '',
+  endTime: '',
+  venue: '',
+  chairedBy: '',
+  recordedBy: '',
+  totalMembers: '',
   attendees: '',
   agendaItems: [{ text: '' }],
-  decisions: [{ text: '' }],
-  actionItems: [{ task: '', owner: '', deadline: '', status: 'Pending' }],
+  discussionItems: [{ agendaItem: '', discussion: '', decision: '' }],
+  actionItems: [{ task: '', owner: '', deadline: '', priority: 'Medium', status: 'Pending' }],
+  directorUpdates: [{ avenue: '', update: '' }],
+  financials: { income: '', expense: '' },
+  announcements: '',
+  nextMeetingTitle: '',
+  nextMeetingDate: '',
+  nextMeetingTime: '',
+  nextMeetingVenue: '',
+  attachments: [{ name: '', url: '' }],
+  preparedBy: '',
+  reviewedBy: '',
+  approvedBy: '',
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -109,6 +131,84 @@ function DynamicList({ label, items, onChange, fieldKey = 'text', placeholder })
         Add {label.toLowerCase().replace(/s$/, '')}
       </button>
     </div>
+  )
+}
+
+// ─── Generic Multi-Field List (discussion, director updates, attachments) ─────
+
+function MultiFieldList({ label, items, onChange, fields, addRow, placeholder = {} }) {
+  const update = (idx, key, value) => {
+    const next = [...items]
+    next[idx] = { ...next[idx], [key]: value }
+    onChange(next)
+  }
+  const add = () => onChange([...items, addRow])
+  const remove = (idx) => onChange(items.filter((_, i) => i !== idx))
+
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{label}</label>
+      <div className="space-y-3">
+        {items.map((item, idx) => (
+          <div key={idx} className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-gray-400">#{idx + 1}</span>
+              {items.length > 1 && (
+                <button onClick={() => remove(idx)} className="text-xs text-red-400 hover:text-red-600 transition-colors">Remove</button>
+              )}
+            </div>
+            {fields.map(f => (
+              <input
+                key={f}
+                type="text"
+                value={item[f] || ''}
+                onChange={(e) => update(idx, f, e.target.value)}
+                placeholder={placeholder[f] || f}
+                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors"
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      <button onClick={add} className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-rotary-blue hover:text-rotary-blue/70 transition-colors">
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+        </svg>
+        Add {label.toLowerCase().replace(/s$/, '')}
+      </button>
+    </div>
+  )
+}
+
+// ─── Accordion Section (drawer) ────────────────────────────────────────────────
+
+function AccordionSection({ title, defaultOpen = true, children }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <section className="border border-gray-100 rounded-2xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+      >
+        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">{title}</h3>
+        <svg className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="px-4 py-4">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
   )
 }
 
@@ -410,14 +510,75 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                     className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Next Meeting Date</label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Meeting Number</label>
                   <input
-                    type="date"
-                    value={form.nextMeetingDate}
-                    onChange={e => set('nextMeetingDate', e.target.value)}
+                    type="text"
+                    value={form.meetingNumber}
+                    onChange={e => set('meetingNumber', e.target.value)}
+                    placeholder="e.g. GBM #05"
                     className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
                   />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Meeting Type</label>
+                  <select
+                    value={form.meetingType}
+                    onChange={e => set('meetingType', e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  >
+                    {MEETING_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Start Time</label>
+                  <input
+                    type="time"
+                    value={form.startTime}
+                    onChange={e => set('startTime', e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">End Time</label>
+                  <input
+                    type="time"
+                    value={form.endTime}
+                    onChange={e => set('endTime', e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Venue</label>
+                  <input
+                    type="text"
+                    value={form.venue}
+                    onChange={e => set('venue', e.target.value)}
+                    placeholder="e.g. Google Meet / BTM Clubhouse"
+                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Total Members</label>
+                  <input
+                    type="number"
+                    value={form.totalMembers}
+                    onChange={e => set('totalMembers', e.target.value)}
+                    placeholder="e.g. 35"
+                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Chaired By</label>
+                  <OwnerDropdown value={form.chairedBy} members={members} onChange={v => set('chairedBy', v)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Recorded By</label>
+                  <OwnerDropdown value={form.recordedBy} members={members} onChange={v => set('recordedBy', v)} />
                 </div>
               </div>
 
@@ -428,7 +589,15 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
               />
 
               <DynamicList label="Agenda Items" items={form.agendaItems} onChange={v => set('agendaItems', v)} placeholder="e.g. Review last month's projects" />
-              <DynamicList label="Decisions Made" items={form.decisions} onChange={v => set('decisions', v)} placeholder="e.g. Approved ₹5,000 for event logistics" />
+
+              <MultiFieldList
+                label="Discussion & Decisions"
+                items={form.discussionItems}
+                onChange={v => set('discussionItems', v)}
+                fields={['agendaItem', 'discussion', 'decision']}
+                addRow={{ agendaItem: '', discussion: '', decision: '' }}
+                placeholder={{ agendaItem: 'Agenda item', discussion: 'Discussion summary', decision: 'Decision taken' }}
+              />
 
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Action Items</label>
@@ -452,7 +621,7 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                         placeholder="Describe the task"
                         className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors"
                       />
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         <OwnerDropdown
                           value={item.owner}
                           members={members}
@@ -472,12 +641,23 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                           }}
                           className="px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors"
                         />
+                        <select
+                          value={item.priority || 'Medium'}
+                          onChange={e => {
+                            const next = [...form.actionItems]
+                            next[idx] = { ...next[idx], priority: e.target.value }
+                            set('actionItems', next)
+                          }}
+                          className="px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors"
+                        >
+                          {Object.keys(PRIORITY_COLORS).map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
                       </div>
                     </div>
                   ))}
                 </div>
                 <button
-                  onClick={() => set('actionItems', [...form.actionItems, { task: '', owner: '', deadline: '', status: 'Pending' }])}
+                  onClick={() => set('actionItems', [...form.actionItems, { task: '', owner: '', deadline: '', priority: 'Medium', status: 'Pending' }])}
                   className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-rotary-blue hover:text-rotary-blue/70 transition-colors"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -485,6 +665,103 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                   </svg>
                   Add action item
                 </button>
+              </div>
+
+              <MultiFieldList
+                label="Director Updates"
+                items={form.directorUpdates}
+                onChange={v => set('directorUpdates', v)}
+                fields={['avenue', 'update']}
+                addRow={{ avenue: '', update: '' }}
+                placeholder={{ avenue: 'Avenue (e.g. Community Service)', update: 'Update' }}
+              />
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Income (₹)</label>
+                  <input
+                    type="number"
+                    value={form.financials?.income || ''}
+                    onChange={e => set('financials', { ...form.financials, income: e.target.value })}
+                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Expense (₹)</label>
+                  <input
+                    type="number"
+                    value={form.financials?.expense || ''}
+                    onChange={e => set('financials', { ...form.financials, expense: e.target.value })}
+                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Announcements</label>
+                <textarea
+                  value={form.announcements}
+                  onChange={e => set('announcements', e.target.value)}
+                  rows={3}
+                  placeholder="Any general announcements…"
+                  className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Next Meeting</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    value={form.nextMeetingTitle}
+                    onChange={e => set('nextMeetingTitle', e.target.value)}
+                    placeholder="e.g. Board Meeting #03"
+                    className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                  <input
+                    type="date"
+                    value={form.nextMeetingDate}
+                    onChange={e => set('nextMeetingDate', e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                  <input
+                    type="time"
+                    value={form.nextMeetingTime}
+                    onChange={e => set('nextMeetingTime', e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                  <input
+                    type="text"
+                    value={form.nextMeetingVenue}
+                    onChange={e => set('nextMeetingVenue', e.target.value)}
+                    placeholder="Venue"
+                    className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                  />
+                </div>
+              </div>
+
+              <MultiFieldList
+                label="Attachments"
+                items={form.attachments}
+                onChange={v => set('attachments', v)}
+                fields={['name', 'url']}
+                addRow={{ name: '', url: '' }}
+                placeholder={{ name: 'File name', url: 'Link (Drive/URL)' }}
+              />
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Prepared By</label>
+                  <OwnerDropdown value={form.preparedBy} members={members} onChange={v => set('preparedBy', v)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Reviewed By</label>
+                  <OwnerDropdown value={form.reviewedBy} members={members} onChange={v => set('reviewedBy', v)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Approved By</label>
+                  <OwnerDropdown value={form.approvedBy} members={members} onChange={v => set('approvedBy', v)} />
+                </div>
               </div>
             </div>
 
@@ -521,13 +798,41 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 function exportMomToPdf(mom) {
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'
+  const fmtTime = (t) => {
+    if (!t) return ''
+    const [h, m] = t.split(':')
+    const hour = parseInt(h, 10)
+    const ampm = hour >= 12 ? 'PM' : 'AM'
+    const h12 = hour % 12 === 0 ? 12 : hour % 12
+    return `${h12}:${m} ${ampm}`
+  }
   const attendees = mom.attendees ? mom.attendees.split(',').map(s => s.trim()).filter(Boolean) : []
+  const total = parseInt(mom.totalMembers, 10) || 0
+  const pct = total > 0 ? ((attendees.length / total) * 100).toFixed(1) : null
   const agenda = (mom.agendaItems || []).filter(a => a.text)
-  const decisions = (mom.decisions || []).filter(d => d.text)
+  const discussions = (mom.discussionItems || []).filter(d => d.agendaItem || d.discussion || d.decision)
   const actions = (mom.actionItems || []).filter(a => a.task)
+  const directorUpdates = (mom.directorUpdates || []).filter(d => d.avenue || d.update)
+  const attachments = (mom.attachments || []).filter(a => a.name || a.url)
+  const income = parseFloat(mom.financials?.income) || 0
+  const expense = parseFloat(mom.financials?.expense) || 0
+  const hasFinancials = mom.financials?.income || mom.financials?.expense
 
   const statusBg = { 'Pending': '#fef3c7', 'In Progress': '#dbeafe', 'Done': '#dcfce7' }
   const statusFg = { 'Pending': '#92400e', 'In Progress': '#1d4ed8', 'Done': '#15803d' }
+  const priorityBg = { 'Low': '#f3f4f6', 'Medium': '#dbeafe', 'High': '#fee2e2' }
+  const priorityFg = { 'Low': '#4b5563', 'Medium': '#1d4ed8', 'High': '#b91c1c' }
+
+  const infoRows = [
+    ['Meeting Number', mom.meetingNumber || '—'],
+    ['Meeting Type', mom.meetingType || '—'],
+    ['Date', fmtDate(mom.meetingDate)],
+    ['Time', mom.startTime ? `${fmtTime(mom.startTime)}${mom.endTime ? ' – ' + fmtTime(mom.endTime) : ''}` : '—'],
+    ['Venue', mom.venue || '—'],
+    ['Chaired By', mom.chairedBy || '—'],
+    ['Recorded By', mom.recordedBy || '—'],
+    ['Attendance', total > 0 ? `${attendees.length} / ${total} (${pct}%)` : `${attendees.length}`],
+  ]
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>MoM - ${esc(mom.meetingTitle)}</title>
@@ -549,7 +854,12 @@ function exportMomToPdf(mom) {
   th { background: #1e2837; color: white; padding: 10px 12px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
   td { padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
   tr:nth-child(even) { background: #fafafa; }
+  .info-table td:first-child { font-weight: 600; color: #666; width: 180px; }
   .status { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
+  .financials { display: flex; gap: 16px; }
+  .fin-card { flex: 1; background: #f8f9fa; border: 1px solid #e8ecf0; border-radius: 10px; padding: 12px 16px; }
+  .fin-card .label { font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 4px; }
+  .fin-card .value { font-size: 18px; font-weight: 700; }
   .footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid #eee; font-size: 10px; color: #aaa; text-align: center; }
   @media print { body { padding: 20px; } }
 </style></head><body>
@@ -566,10 +876,45 @@ function exportMomToPdf(mom) {
     ${attendees.length > 0 ? `<span>👥 ${attendees.length} attendee${attendees.length !== 1 ? 's' : ''}</span>` : ''}
     ${actions.length > 0 ? `<span>✅ ${actions.length} action item${actions.length !== 1 ? 's' : ''}</span>` : ''}
   </div>
+
+  <div class="section"><div class="section-title">Meeting Information</div>
+    <table class="info-table">${infoRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
+  </div>
+
   ${attendees.length > 0 ? `<div class="section"><div class="section-title">Attendees</div><div class="attendees">${attendees.map(a => `<span class="attendee">${esc(a)}</span>`).join('')}</div></div>` : ''}
+
   ${agenda.length > 0 ? `<div class="section"><div class="section-title">Agenda</div>${agenda.map((a, i) => `<div class="list-item"><span class="badge" style="background:#d41367">${i + 1}</span><span>${esc(a.text)}</span></div>`).join('')}</div>` : ''}
-  ${decisions.length > 0 ? `<div class="section"><div class="section-title">Decisions Made</div>${decisions.map(d => `<div class="list-item"><span class="badge" style="background:#22c55e">✓</span><span>${esc(d.text)}</span></div>`).join('')}</div>` : ''}
-  ${actions.length > 0 ? `<div class="section"><div class="section-title">Action Items</div><table><thead><tr><th>Task</th><th>Owner</th><th>Deadline</th><th>Status</th></tr></thead><tbody>${actions.map(a => `<tr><td>${esc(a.task)}</td><td>${esc(a.owner || '—')}</td><td>${a.deadline ? fmtDate(a.deadline) : '—'}</td><td><span class="status" style="background:${statusBg[a.status || 'Pending']};color:${statusFg[a.status || 'Pending']}">${esc(a.status || 'Pending')}</span></td></tr>`).join('')}</tbody></table></div>` : ''}
+
+  ${discussions.length > 0 ? `<div class="section"><div class="section-title">Discussion &amp; Decisions</div><table><thead><tr><th>Agenda Item</th><th>Discussion Summary</th><th>Decision Taken</th></tr></thead><tbody>${discussions.map(d => `<tr><td>${esc(d.agendaItem || '—')}</td><td>${esc(d.discussion || '—')}</td><td>${esc(d.decision || '—')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+
+  ${actions.length > 0 ? `<div class="section"><div class="section-title">Action Items</div><table><thead><tr><th>Task</th><th>Owner</th><th>Deadline</th><th>Priority</th><th>Status</th></tr></thead><tbody>${actions.map(a => `<tr><td>${esc(a.task)}</td><td>${esc(a.owner || '—')}</td><td>${a.deadline ? fmtDate(a.deadline) : '—'}</td><td><span class="status" style="background:${priorityBg[a.priority || 'Medium']};color:${priorityFg[a.priority || 'Medium']}">${esc(a.priority || 'Medium')}</span></td><td><span class="status" style="background:${statusBg[a.status || 'Pending']};color:${statusFg[a.status || 'Pending']}">${esc(a.status || 'Pending')}</span></td></tr>`).join('')}</tbody></table></div>` : ''}
+
+  ${directorUpdates.length > 0 ? `<div class="section"><div class="section-title">Director Updates</div><table><thead><tr><th>Avenue</th><th>Update</th></tr></thead><tbody>${directorUpdates.map(d => `<tr><td>${esc(d.avenue || '—')}</td><td>${esc(d.update || '—')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+
+  ${hasFinancials ? `<div class="section"><div class="section-title">Financial Updates</div><div class="financials">
+    <div class="fin-card"><div class="label">Income</div><div class="value" style="color:#15803d">₹${income.toLocaleString('en-IN')}</div></div>
+    <div class="fin-card"><div class="label">Expense</div><div class="value" style="color:#b91c1c">₹${expense.toLocaleString('en-IN')}</div></div>
+    <div class="fin-card"><div class="label">Balance</div><div class="value" style="color:#1e2837">₹${(income - expense).toLocaleString('en-IN')}</div></div>
+  </div></div>` : ''}
+
+  ${mom.announcements ? `<div class="section"><div class="section-title">Announcements</div><p style="font-size:13px;line-height:1.6">${esc(mom.announcements)}</p></div>` : ''}
+
+  ${(mom.nextMeetingTitle || mom.nextMeetingDate) ? `<div class="section"><div class="section-title">Next Meeting</div>
+    <table class="info-table">
+      ${mom.nextMeetingTitle ? `<tr><td>Meeting</td><td>${esc(mom.nextMeetingTitle)}</td></tr>` : ''}
+      ${mom.nextMeetingDate ? `<tr><td>Date</td><td>${fmtDate(mom.nextMeetingDate)}</td></tr>` : ''}
+      ${mom.nextMeetingTime ? `<tr><td>Time</td><td>${fmtTime(mom.nextMeetingTime)}</td></tr>` : ''}
+      ${mom.nextMeetingVenue ? `<tr><td>Venue</td><td>${esc(mom.nextMeetingVenue)}</td></tr>` : ''}
+    </table>
+  </div>` : ''}
+
+  ${attachments.length > 0 ? `<div class="section"><div class="section-title">Attachments</div>${attachments.map(a => `<div class="list-item"><span class="badge" style="background:#6b7280">📎</span><span>${esc(a.name || a.url)}</span></div>`).join('')}</div>` : ''}
+
+  ${(mom.preparedBy || mom.reviewedBy || mom.approvedBy) ? `<div class="section"><div class="section-title">Approval</div>
+    <table><thead><tr><th>Prepared By</th><th>Reviewed By</th><th>Approved By</th></tr></thead>
+    <tbody><tr><td>${esc(mom.preparedBy || '—')}</td><td>${esc(mom.reviewedBy || '—')}</td><td>${esc(mom.approvedBy || '—')}</td></tr></tbody></table>
+  </div>` : ''}
+
   <div class="footer">Rotaract Club of Bengaluru BTM · RID 3190 · Create. Lead. Inspire.</div>
 </body></html>`
 
@@ -584,6 +929,32 @@ function exportMomToPdf(mom) {
 function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
   if (!mom) return null
   const attendeeList = mom.attendees ? mom.attendees.split(',').map(s => s.trim()).filter(Boolean) : []
+  const total = parseInt(mom.totalMembers, 10) || 0
+  const pct = total > 0 ? ((attendeeList.length / total) * 100).toFixed(1) : null
+  const discussionList = (mom.discussionItems || []).filter(d => d.agendaItem || d.discussion || d.decision)
+  const directorUpdateList = (mom.directorUpdates || []).filter(d => d.avenue || d.update)
+  const attachmentList = (mom.attachments || []).filter(a => a.name || a.url)
+  const income = parseFloat(mom.financials?.income) || 0
+  const expense = parseFloat(mom.financials?.expense) || 0
+  const hasFinancials = mom.financials?.income || mom.financials?.expense
+  const fmtTime = (t) => {
+    if (!t) return ''
+    const [h, m] = t.split(':')
+    const hour = parseInt(h, 10)
+    const ampm = hour >= 12 ? 'PM' : 'AM'
+    const h12 = hour % 12 === 0 ? 12 : hour % 12
+    return `${h12}:${m} ${ampm}`
+  }
+
+  const infoRows = [
+    ['Meeting Number', mom.meetingNumber],
+    ['Meeting Type', mom.meetingType],
+    ['Date', formatDate(mom.meetingDate)],
+    ['Time', mom.startTime ? `${fmtTime(mom.startTime)}${mom.endTime ? ' – ' + fmtTime(mom.endTime) : ''}` : null],
+    ['Venue', mom.venue],
+    ['Chaired By', mom.chairedBy],
+    ['Recorded By', mom.recordedBy],
+  ].filter(([, v]) => v)
 
   return (
     <AnimatePresence>
@@ -647,10 +1018,23 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
             </div>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-3">
+
+              {infoRows.length > 0 && (
+                <AccordionSection title="Meeting Information">
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+                    {infoRows.map(([k, v]) => (
+                      <div key={k}>
+                        <dt className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{k}</dt>
+                        <dd className="text-sm text-gray-700 mt-0.5">{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </AccordionSection>
+              )}
+
               {attendeeList.length > 0 && (
-                <section>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2.5">Attendees · {attendeeList.length}</h3>
+                <AccordionSection title={`Attendance · ${attendeeList.length}${total > 0 ? ` / ${total} (${pct}%)` : ''}`}>
                   <div className="flex flex-wrap gap-2">
                     {attendeeList.map((a, i) => (
                       <span key={i} className="flex items-center gap-1.5 px-3 py-1 bg-gray-100 rounded-full text-sm font-medium text-gray-700">
@@ -659,12 +1043,11 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
                       </span>
                     ))}
                   </div>
-                </section>
+                </AccordionSection>
               )}
 
               {mom.agendaItems?.some(a => a.text) && (
-                <section>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2.5">Agenda</h3>
+                <AccordionSection title="Agenda">
                   <ol className="space-y-1.5">
                     {mom.agendaItems.filter(a => a.text).map((a, i) => (
                       <li key={i} className="flex items-start gap-2.5 text-sm text-gray-700">
@@ -673,28 +1056,36 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
                       </li>
                     ))}
                   </ol>
-                </section>
+                </AccordionSection>
               )}
 
-              {mom.decisions?.some(d => d.text) && (
-                <section>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2.5">Decisions Made</h3>
-                  <ul className="space-y-1.5">
-                    {mom.decisions.filter(d => d.text).map((d, i) => (
-                      <li key={i} className="flex items-start gap-2.5 text-sm text-gray-700">
-                        <svg className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                        </svg>
-                        {d.text}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
+              {discussionList.length > 0 && (
+                <AccordionSection title="Discussion & Decisions">
+                  <div className="overflow-x-auto -mx-1">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider text-left">
+                          <th className="px-1 pb-2">Agenda Item</th>
+                          <th className="px-1 pb-2">Discussion Summary</th>
+                          <th className="px-1 pb-2">Decision Taken</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {discussionList.map((d, i) => (
+                          <tr key={i} className="align-top">
+                            <td className="px-1 py-2 font-medium text-gray-800">{d.agendaItem || '—'}</td>
+                            <td className="px-1 py-2 text-gray-600">{d.discussion || '—'}</td>
+                            <td className="px-1 py-2 text-gray-600">{d.decision || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </AccordionSection>
               )}
 
               {mom.actionItems?.some(a => a.task) && (
-                <section>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2.5">Action Items</h3>
+                <AccordionSection title="Action Items">
                   <div className="space-y-2">
                     {mom.actionItems.filter(a => a.task).map((item, i) => (
                       <div key={i} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
@@ -702,7 +1093,7 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
                           <p className="text-sm font-medium text-gray-800 flex-1">{item.task}</p>
                           <StatusBadge status={item.status || 'Pending'} onChange={(s) => onStatusChange(i, s)} />
                         </div>
-                        <div className="flex items-center gap-3 text-xs text-gray-400">
+                        <div className="flex items-center gap-3 text-xs text-gray-400 flex-wrap">
                           {item.owner && (
                             <span className="flex items-center gap-1">
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
@@ -715,11 +1106,106 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
                               Due {formatDate(item.deadline)}
                             </span>
                           )}
+                          {item.priority && (
+                            <span className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold border ${PRIORITY_COLORS[item.priority] || PRIORITY_COLORS.Medium}`}>
+                              {item.priority}
+                            </span>
+                          )}
                         </div>
                       </div>
                     ))}
                   </div>
-                </section>
+                </AccordionSection>
+              )}
+
+              {directorUpdateList.length > 0 && (
+                <AccordionSection title="Director Reports">
+                  <div className="space-y-2">
+                    {directorUpdateList.map((d, i) => (
+                      <div key={i} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                        <p className="text-xs font-semibold text-rotary-blue mb-1">{d.avenue || 'Update'}</p>
+                        <p className="text-sm text-gray-700">{d.update}</p>
+                      </div>
+                    ))}
+                  </div>
+                </AccordionSection>
+              )}
+
+              {hasFinancials && (
+                <AccordionSection title="Financial Updates">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-green-50 rounded-xl p-3 border border-green-100">
+                      <p className="text-[10px] font-semibold text-green-600 uppercase tracking-wider mb-1">Income</p>
+                      <p className="text-lg font-display font-bold text-green-700">₹{income.toLocaleString('en-IN')}</p>
+                    </div>
+                    <div className="bg-red-50 rounded-xl p-3 border border-red-100">
+                      <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wider mb-1">Expense</p>
+                      <p className="text-lg font-display font-bold text-red-700">₹{expense.toLocaleString('en-IN')}</p>
+                    </div>
+                    <div className="bg-gray-100 rounded-xl p-3 border border-gray-200">
+                      <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1">Balance</p>
+                      <p className="text-lg font-display font-bold text-gray-800">₹{(income - expense).toLocaleString('en-IN')}</p>
+                    </div>
+                  </div>
+                </AccordionSection>
+              )}
+
+              {mom.announcements && (
+                <AccordionSection title="Announcements">
+                  <p className="text-sm text-gray-700 whitespace-pre-line">{mom.announcements}</p>
+                </AccordionSection>
+              )}
+
+              {(mom.nextMeetingTitle || mom.nextMeetingDate || mom.nextMeetingVenue) && (
+                <AccordionSection title="Next Meeting">
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+                    {mom.nextMeetingTitle && (
+                      <div><dt className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Meeting</dt><dd className="text-sm text-gray-700 mt-0.5">{mom.nextMeetingTitle}</dd></div>
+                    )}
+                    {mom.nextMeetingDate && (
+                      <div><dt className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Date</dt><dd className="text-sm text-gray-700 mt-0.5">{formatDate(mom.nextMeetingDate)}</dd></div>
+                    )}
+                    {mom.nextMeetingTime && (
+                      <div><dt className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Time</dt><dd className="text-sm text-gray-700 mt-0.5">{fmtTime(mom.nextMeetingTime)}</dd></div>
+                    )}
+                    {mom.nextMeetingVenue && (
+                      <div><dt className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Venue</dt><dd className="text-sm text-gray-700 mt-0.5">{mom.nextMeetingVenue}</dd></div>
+                    )}
+                  </dl>
+                </AccordionSection>
+              )}
+
+              {attachmentList.length > 0 && (
+                <AccordionSection title="Attachments" defaultOpen={false}>
+                  <div className="space-y-1.5">
+                    {attachmentList.map((a, i) => (
+                      a.url ? (
+                        <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-rotary-blue hover:underline">
+                          <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                          {a.name || a.url}
+                        </a>
+                      ) : (
+                        <p key={i} className="flex items-center gap-2 text-sm text-gray-700">
+                          <svg className="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                          {a.name}
+                        </p>
+                      )
+                    ))}
+                  </div>
+                </AccordionSection>
+              )}
+
+              {(mom.preparedBy || mom.reviewedBy || mom.approvedBy) && (
+                <AccordionSection title="Approvals" defaultOpen={false}>
+                  <div className="grid grid-cols-3 gap-3 text-center">
+                    {[['Prepared By', mom.preparedBy], ['Reviewed By', mom.reviewedBy], ['Approved By', mom.approvedBy]].map(([label, val]) => (
+                      <div key={label} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">{label}</p>
+                        <p className="text-sm font-medium text-gray-700">{val || '—'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </AccordionSection>
               )}
             </div>
           </motion.div>
@@ -760,30 +1246,48 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
 
   // Firestore — MoMs
   useEffect(() => {
-    const q = query(collection(db, 'moms'), orderBy('meetingDate', 'desc'))
-    return onSnapshot(q, (snap) => {
-      setMoms(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      setLoading(false)
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      const q = mod.query(mod.collection(db, 'moms'), mod.orderBy('meetingDate', 'desc'))
+      unsub = mod.onSnapshot(q, (snap) => {
+        setMoms(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setLoading(false)
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   // Firestore — Members
   useEffect(() => {
-    return onSnapshot(collection(db, 'leaders'), (snap) => {
-      const sorted = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(m => m.name)
-        .sort((a, b) => a.name.localeCompare(b.name))
-      setMembers(sorted)
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      unsub = mod.onSnapshot(mod.collection(db, 'leaders'), (snap) => {
+        const sorted = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(m => m.name)
+          .sort((a, b) => a.name.localeCompare(b.name))
+        setMembers(sorted)
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   // Firestore — Attendance Meetings (for dropdown)
   useEffect(() => {
-    const q = query(collection(db, 'attendance_meetings'), orderBy('date', 'desc'))
-    return onSnapshot(q, (snap) => {
-      setAttendanceMeetings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      const q = mod.query(mod.collection(db, 'attendance_meetings'), mod.orderBy('date', 'desc'))
+      unsub = mod.onSnapshot(q, (snap) => {
+        setAttendanceMeetings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   // Auto-open modal when navigated from AttendanceTracker
@@ -798,34 +1302,34 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
       setEditingMom(existing)
     } else {
       setEditingMom({
+        ...EMPTY_MOM,
         meetingTitle: linkedMeeting.title,
         meetingDate: linkedMeeting.date,
         attendees: attendeeNames,
         linkedMeetingId: linkedMeeting.id,
-        agendaItems: [{ text: '' }],
-        decisions: [{ text: '' }],
-        actionItems: [{ task: '', owner: '', deadline: '', status: 'Pending' }],
       })
     }
     setModalOpen(true)
   }, [linkedMeeting, members.length, loading])
 
   const handleSave = async (form) => {
+    const { mod, db } = await loadFirestore()
     if (editingMom?.id) {
-      const updates = { ...form, updatedAt: serverTimestamp() }
+      const updates = { ...form, updatedAt: mod.serverTimestamp() }
       if (editingMom.linkedMeetingId) updates.linkedMeetingId = editingMom.linkedMeetingId
-      await updateDoc(doc(db, 'moms', editingMom.id), updates)
+      await mod.updateDoc(mod.doc(db, 'moms', editingMom.id), updates)
       if (selectedMom?.id === editingMom.id) setSelectedMom({ ...editingMom, ...form })
     } else {
-      const data = { ...form, createdAt: serverTimestamp() }
+      const data = { ...form, createdAt: mod.serverTimestamp() }
       if (editingMom?.linkedMeetingId) data.linkedMeetingId = editingMom.linkedMeetingId
-      await addDoc(collection(db, 'moms'), data)
+      await mod.addDoc(mod.collection(db, 'moms'), data)
     }
     setEditingMom(null)
   }
 
   const handleDelete = async (mom) => {
-    await deleteDoc(doc(db, 'moms', mom.id))
+    const { mod, db } = await loadFirestore()
+    await mod.deleteDoc(mod.doc(db, 'moms', mom.id))
     if (selectedMom?.id === mom.id) setSelectedMom(null)
     setDeleteConfirm(null)
   }
@@ -837,7 +1341,8 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
     )
     const updated = { ...selectedMom, actionItems: updatedActions }
     setSelectedMom(updated)
-    await updateDoc(doc(db, 'moms', selectedMom.id), { actionItems: updatedActions })
+    const { mod, db } = await loadFirestore()
+    await mod.updateDoc(mod.doc(db, 'moms', selectedMom.id), { actionItems: updatedActions })
   }
 
   const filtered = moms.filter(m =>
@@ -966,10 +1471,15 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
                 >
                   <div className="flex items-start justify-between gap-2 mb-3">
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-rotary-blue mb-1">{formatDate(mom.meetingDate)}</p>
+                      <p className="text-xs font-semibold text-rotary-blue mb-1">
+                        {formatDate(mom.meetingDate)}{mom.meetingNumber ? ` · ${mom.meetingNumber}` : ''}
+                      </p>
                       <h3 className="font-display font-bold text-rotary-charcoal text-base leading-tight truncate group-hover:text-rotary-blue transition-colors">
                         {mom.meetingTitle}
                       </h3>
+                      {mom.venue && (
+                        <p className="text-xs text-gray-400 truncate mt-0.5">{mom.venue}</p>
+                      )}
                       {mom.linkedMeetingId && (
                         <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-full mt-1">
                           <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

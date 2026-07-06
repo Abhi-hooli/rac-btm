@@ -85,7 +85,7 @@ export default function Gallery({ isAdmin, permissions, onBack }) {
 
   // ── Album Grid ──
   if (!selectedAlbum) return (
-    <div className="min-h-screen pt-20">
+    <div className="min-h-screen pt-5">
       <div className="section-padding max-w-7xl mx-auto">
 
         {/* Header */}
@@ -220,7 +220,7 @@ export default function Gallery({ isAdmin, permissions, onBack }) {
   // ── Single Album View ──
   const photos = selectedAlbum.photos || []
   return (
-    <div className="min-h-screen pt-20">
+    <div className="min-h-screen pt-5">
       <div className="section-padding max-w-7xl mx-auto">
 
         {/* Header */}

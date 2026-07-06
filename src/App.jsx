@@ -3,8 +3,7 @@ import { AnimatePresence } from 'framer-motion'
 import IntroAnimation from './components/intro/IntroAnimation'
 import Navbar from './components/layout/Navbar'
 import ScrollProgress from './components/ui/ScrollProgress'
-import { getAuth, onAuthStateChanged } from 'firebase/auth'
-import UserManagement from "./components/sections/UserManagement";
+import { subscribeAuthState, firebaseAdminLogout } from './firebase'
 import { logAction } from './utils/auditLog'
 import { useSEO } from './hooks/useSEO'
 import MaintenancePage from './components/sections/MaintenancePage'
@@ -37,6 +36,11 @@ const NewsletterGenerator = lazy(() => import('./components/sections/NewsletterG
 const Gallery = lazy(() => import('./components/sections/Gallery'))
 const GalleryPreview = lazy(() => import('./components/sections/GalleryPreview'))
 const PrivacyPolicy = lazy(() => import('./components/sections/PolicyPage'))
+const LinkRedirects = lazy(() => import('./components/sections/LinkRedirects'))
+const UserManagement = lazy(() => import('./components/sections/UserManagement'))
+const RedirectResolver = lazy(() => import('./components/sections/RedirectResolver'))
+const MembershipForm = lazy(() => import('./components/sections/MembershipForm'))
+const MembershipAdmin = lazy(() => import('./components/sections/MembershipAdmin'))
 
 
 const SectionLoader = () => (
@@ -46,14 +50,25 @@ const SectionLoader = () => (
 )
 
 export default function App() {
-  const [showIntro, setShowIntro] = useState(true)
+  const [showIntro, setShowIntro] = useState(
+    !window.location.pathname.startsWith('/r/') && !sessionStorage.getItem('introShown')
+  )
   const [isDark, setIsDark] = useState(false)
-const [isAdmin, setIsAdmin] = useState(false)
-  const [authChecked, setAuthChecked] = useState(false)
-  const [permissions, setPermissions] = useState(null)
+const [isAdmin, setIsAdmin] = useState(() => !!sessionStorage.getItem('adminPerms'))
+  const [permissions, setPermissions] = useState(() => {
+    const saved = sessionStorage.getItem('adminPerms')
+    return saved ? JSON.parse(saved) : null
+  })
   const [currentPage, setCurrentPage] = useState('home')
   const [momLinkedMeeting, setMomLinkedMeeting] = useState(null)
-  const { data: siteSettings, save: saveSiteSettings } = useDocument('settings', 'site', { maintenanceMode: false })
+  const [redirectSlug, setRedirectSlug] = useState(null)
+  const { data: siteSettings, save: saveSiteSettings } = useDocument('settings', 'site', { maintenanceMode: false }, { live: isAdmin })
+
+  // Section-level edit access — a logged-in officer only sees edit controls
+  // for the sections their role was granted, Super Admin always sees all.
+  const canEditHomepage = isAdmin && (permissions?.isSuperAdmin || permissions?.homepage)
+  const canEditEvents = isAdmin && (permissions?.isSuperAdmin || permissions?.events)
+  const canEditProjects = isAdmin && (permissions?.isSuperAdmin || permissions?.projects)
 
   useSEO(currentPage)
 
@@ -74,8 +89,9 @@ const [isAdmin, setIsAdmin] = useState(false)
   }
 
 useEffect(() => {
-    const auth = getAuth()
-    const unsub = onAuthStateChanged(auth, (user) => {
+    let unsub
+    let cancelled = false
+    subscribeAuthState((user) => {
       if (user) {
         const saved = sessionStorage.getItem('adminPerms')
         if (saved) {
@@ -88,9 +104,8 @@ useEffect(() => {
         sessionStorage.removeItem('adminPerms')
         sessionStorage.removeItem('adminLoginTime')
       }
-      setAuthChecked(true)
-    })
-    return () => unsub()
+    }).then(u => { if (cancelled) u(); else unsub = u })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   // ── Auto-logout after 30 minutes ──
@@ -105,7 +120,7 @@ useEffect(() => {
     const sessionLimit = 0.5 * 60 * 60 * 1000
     if (elapsed >= sessionLimit) {
       // Session expired — force logout
-      getAuth().signOut()
+      firebaseAdminLogout()
       setIsAdmin(false)
       setPermissions(null)
       sessionStorage.clear()
@@ -115,7 +130,7 @@ useEffect(() => {
     // Set timer for remaining time
     const remaining = sessionLimit - elapsed
     const timer = setTimeout(() => {
-      getAuth().signOut()
+      firebaseAdminLogout()
       setIsAdmin(false)
       setPermissions(null)
       sessionStorage.clear()
@@ -132,6 +147,11 @@ useEffect(() => {
     // Route on initial load + back/forward navigation
     const routeFromPath = () => {
       const path = window.location.pathname
+      if (path.startsWith('/r/')) {
+        setRedirectSlug(path.slice(3))
+        setCurrentPage('redirect')
+        return
+      }
       const pathMap = {
         '/': 'home',
         '/projects': 'allProjects',
@@ -150,6 +170,9 @@ useEffect(() => {
         '/newsletter': 'newsletter',
         '/gallery': 'gallery',
         '/privacy': 'privacy',
+        '/link-redirects': 'linkRedirects',
+        '/join': 'joinForm',
+        '/membership-admin': 'membershipAdmin',
       }
       const page = pathMap[path]
       if (page) setCurrentPage(page)
@@ -180,6 +203,9 @@ useEffect(() => {
       newsletter: '/newsletter',
       gallery: '/gallery',
       privacy: '/privacy',
+      linkRedirects: '/link-redirects',
+      joinForm: '/join',
+      membershipAdmin: '/membership-admin',
     }
 
     window.history.pushState({}, '', routes[page] || '/')
@@ -195,13 +221,19 @@ useEffect(() => {
       <AnimatePresence mode="wait">
         {showIntro && (
           <IntroAnimation
-            onComplete={() => setShowIntro(false)}
-            onSkip={() => setShowIntro(false)}
+            onComplete={() => { sessionStorage.setItem('introShown', '1'); setShowIntro(false) }}
+            onSkip={() => { sessionStorage.setItem('introShown', '1'); setShowIntro(false) }}
           />
         )}
       </AnimatePresence>
 
-      {!showIntro && authChecked && siteSettings.maintenanceMode && !isAdmin && (
+      {!showIntro && currentPage === 'redirect' && (
+        <Suspense fallback={<SectionLoader />}>
+          <RedirectResolver slug={redirectSlug} onBack={() => goToPage('home')} />
+        </Suspense>
+      )}
+
+      {!showIntro && currentPage !== 'redirect' && currentPage !== 'joinForm' && siteSettings.maintenanceMode && !isAdmin && (
         <MaintenancePage resumeAt={siteSettings.maintenanceEndTime || null} onLogin={(perms) => {
           setIsAdmin(true)
           setPermissions(perms)
@@ -217,7 +249,7 @@ useEffect(() => {
         }} />
       )}
 
-      {!showIntro && authChecked && (!siteSettings.maintenanceMode || isAdmin) && (
+      {!showIntro && currentPage !== 'redirect' && (!siteSettings.maintenanceMode || isAdmin || currentPage === 'joinForm') && (
         <>
           <ScrollProgress />
           <Navbar
@@ -248,7 +280,7 @@ useEffect(() => {
                 item:    'Admin Session',
                 details: `Logged out at ${new Date().toLocaleString('en-IN')}`,
               })
-              await getAuth().signOut()
+              await firebaseAdminLogout()
               setIsAdmin(false)
               setPermissions(null)
               sessionStorage.removeItem('adminPerms')
@@ -267,6 +299,9 @@ useEffect(() => {
             onBlog={() => goToPage('blog')}
             onNewsletter={() => goToPage('newsletter')}
             onUserManagement={() => goToPage('users')}
+            onLinkRedirects={() => goToPage('linkRedirects')}
+            onMembershipAdmin={() => goToPage('membershipAdmin')}
+            onJoin={() => goToPage('joinForm')}
           />
 
           <main>
@@ -275,17 +310,16 @@ useEffect(() => {
               {/* ── Home ── */}
               {currentPage === 'home' && (
                 <>
-                  <Hero setCurrentPage={goToPage} isAdmin={isAdmin} />
-                  <About isAdmin={isAdmin} />
-                  <Impact isAdmin={isAdmin} />
+                  <Hero setCurrentPage={goToPage} isAdmin={canEditHomepage} />
+                  <About isAdmin={canEditHomepage} setCurrentPage={goToPage} />
+                  <Impact isAdmin={canEditHomepage} />
                   <Projects
                     onViewAll={() => goToPage('allProjects')}
-                    onViewArchives={() => goToPage('archives')}
                   />
-                  <Events isAdmin={isAdmin} />
-                  <Leadership onViewTeam={() => goToPage('ourTeam')} isAdmin={isAdmin} />
+                  <Events isAdmin={canEditEvents} setCurrentPage={goToPage} />
+                  <Leadership onViewTeam={() => goToPage('ourTeam')} onViewArchives={() => goToPage('archives')} isAdmin={canEditHomepage} />
                   <GalleryPreview onViewAll={() => goToPage('gallery')} />
-                  <Testimonials isAdmin={isAdmin} />
+                  <Testimonials isAdmin={canEditHomepage} />
                   <JoinCTA setCurrentPage={goToPage} />
                   <Footer goToPage={goToPage} />
                 </>
@@ -294,7 +328,7 @@ useEffect(() => {
               {/* ── All Projects ── */}
               {currentPage === 'allProjects' && (
                 <>
-                  <AllProjects isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <AllProjects isAdmin={canEditProjects} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
@@ -302,7 +336,7 @@ useEffect(() => {
               {/* ── Our Team ── */}
               {currentPage === 'ourTeam' && (
                 <>
-                  <OurTeam isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <OurTeam isAdmin={canEditHomepage} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
@@ -310,7 +344,7 @@ useEffect(() => {
               {/* ── Calendar ── */}
               {currentPage === 'calendar' && (
                 <>
-                  <CalendarPage isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <CalendarPage isAdmin={canEditEvents} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
@@ -372,6 +406,14 @@ useEffect(() => {
                 </>
               )}
 
+              {/* ── Join / Membership Application ── */}
+              {currentPage === 'joinForm' && (
+                <>
+                  <MembershipForm onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
               {currentPage === 'analytics' && !permissions?.analytics && goToPage('home')}
               {/* ── Analytics ── */}
               {currentPage === 'analytics' && permissions?.analytics && (
@@ -416,7 +458,7 @@ useEffect(() => {
               {/* ── Blog ── */}
               {currentPage === 'blog' && (
                 <>
-                  <Blog isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <Blog isAdmin={isAdmin} isSuperAdmin={!!permissions?.isSuperAdmin} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
@@ -434,6 +476,24 @@ useEffect(() => {
               {currentPage === 'newsletter' && isAdmin && (
                 <>
                   <NewsletterGenerator isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {currentPage === 'linkRedirects' && !permissions?.linkRedirects && goToPage('home')}
+              {/* ── Link Redirects ── */}
+              {currentPage === 'linkRedirects' && permissions?.linkRedirects && (
+                <>
+                  <LinkRedirects onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {currentPage === 'membershipAdmin' && !permissions?.membership && goToPage('home')}
+              {/* ── Membership Applications ── */}
+              {currentPage === 'membershipAdmin' && permissions?.membership && (
+                <>
+                  <MembershipAdmin isAdmin={isAdmin} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}

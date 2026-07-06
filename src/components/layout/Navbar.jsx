@@ -8,21 +8,31 @@ const navLinks = [
   { name: 'Impact', href: '#impact' },
   { name: 'Projects', href: '#projects' },
   { name: 'Events', href: '#events' },
-  { name: 'Leadership', href: '#leadership' },
+  {
+    name: 'Leadership', href: '#leadership',
+    dropdown: [
+      { name: 'Our Team', href: '#leadership' },
+      { name: 'Club Archives', href: '#', isPage: true, pageKey: 'archives' },
+    ],
+  },
   { name: 'Calendar', href: '#', isPage: true, pageKey: 'calendar' },
   { name: 'Documents', href: '#', isPage: true, pageKey: 'documents' },
   { name: 'Blog', href: '#', isPage: true, pageKey: 'blog' },
+  { name: 'Join Us', href: '#', isPage: true, pageKey: 'join' },
 ]
 
-export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onContact, onMom, onRsvpAdmin, onUserManagement, onBlog, onNewsletter, currentPage, maintenanceMode, onToggleMaintenance }) {
+export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onArchives, onContact, onMom, onRsvpAdmin, onUserManagement, onBlog, onNewsletter, onLinkRedirects, onMembershipAdmin, onJoin, currentPage, maintenanceMode, onToggleMaintenance }) {
   const [isScrolled, setIsScrolled] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
   const [adminDropdownOpen, setAdminDropdownOpen] = useState(false)
+  const [leadershipDropdownOpen, setLeadershipDropdownOpen] = useState(false)
+  const [mobileLeadershipOpen, setMobileLeadershipOpen] = useState(false)
   const [showMaintenanceConfirm, setShowMaintenanceConfirm] = useState(false)
   const [timerOption, setTimerOption] = useState('none')
   const [customDateTime, setCustomDateTime] = useState('')
   const dropdownRef = useRef(null)
+  const leadershipRef = useRef(null)
 
   useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 50)
@@ -34,6 +44,9 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
     const handleClickOutside = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setAdminDropdownOpen(false)
+      }
+      if (leadershipRef.current && !leadershipRef.current.contains(e.target)) {
+        setLeadershipDropdownOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -48,6 +61,8 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
       if (link.pageKey === 'documents') onDocuments?.()
       else if (link.pageKey === 'calendar') onCalendar?.()
       else if (link.pageKey === 'blog') onBlog?.()
+      else if (link.pageKey === 'archives') onArchives?.()
+      else if (link.pageKey === 'join') onJoin?.()
       return
     }
     if (currentPage !== 'home') {
@@ -65,7 +80,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
   return (
     <>
       <motion.nav
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled
+        className={`fixed top-0 left-0 right-0 z-50 transition-[background-color,box-shadow,border-color,padding] duration-300 will-change-[background-color] ${isScrolled
           ? 'bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-100 py-3'
           : 'bg-transparent py-5'
           }`}
@@ -94,17 +109,60 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
           {/* Desktop nav links */}
           <div className="hidden lg:flex items-center gap-1">
             {navLinks.map((link) => (
-              <a
-                key={link.name}
-                href={link.href}
-                onClick={(e) => handleNavClick(e, link)}
-                className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${isOverHero
-                  ? 'text-white/85 hover:text-white hover:bg-white/10'
-                  : 'text-rotary-charcoal/70 hover:text-rotary-blue hover:bg-rotary-blue/5'
-                  }`}
-              >
-                {link.name}
-              </a>
+              link.dropdown ? (
+                <div className="relative" ref={leadershipRef} key={link.name}>
+                  <button
+                    onClick={() => setLeadershipDropdownOpen(o => !o)}
+                    className={`flex items-center gap-1 px-3.5 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${isOverHero
+                      ? 'text-white/85 hover:text-white hover:bg-white/10'
+                      : 'text-rotary-charcoal/70 hover:text-rotary-blue hover:bg-rotary-blue/5'
+                      }`}
+                  >
+                    {link.name}
+                    <svg
+                      className={`w-3 h-3 transition-transform duration-200 ${leadershipDropdownOpen ? 'rotate-180' : ''}`}
+                      fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  <AnimatePresence>
+                    {leadershipDropdownOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 6, scale: 0.97 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                        transition={{ duration: 0.15 }}
+                        className="absolute left-0 mt-2 w-48 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden"
+                      >
+                        {link.dropdown.map((sub) => (
+                          <a
+                            key={sub.name}
+                            href={sub.href}
+                            onClick={(e) => { setLeadershipDropdownOpen(false); handleNavClick(e, sub) }}
+                            className="block w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-rotary-blue/5 hover:text-rotary-blue transition-colors"
+                          >
+                            {sub.name}
+                          </a>
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ) : (
+                <a
+                  key={link.name}
+                  href={link.href}
+                  onClick={(e) => handleNavClick(e, link)}
+                  className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${isOverHero
+                    ? 'text-white/85 hover:text-white hover:bg-white/10'
+                    : 'text-rotary-charcoal/70 hover:text-rotary-blue hover:bg-rotary-blue/5'
+                    }`}
+                >
+                  {link.name}
+                </a>
+              )
             ))}
           </div>
 
@@ -178,7 +236,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                         </button>
                       )}
 
-                      {/* 4. Treasurer Portal */}
+                      {/* 4. Finance Dashboard */}
                       {permissions?.treasurer && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onTreasurer?.() }}
@@ -189,7 +247,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                             </svg>
                           </div>
-                          Treasurer Portal
+                          Finance Dashboard
                         </button>
                       )}
 
@@ -216,6 +274,32 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                         </div>
                         Newsletter
                       </button>
+
+                      {/* Link Redirects */}
+                      {permissions?.linkRedirects && (
+                        <button
+                          onClick={() => { setAdminDropdownOpen(false); onLinkRedirects?.() }}
+                          className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-sky-50 hover:text-sky-700 transition-colors"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-sky-50 flex items-center justify-center flex-shrink-0">
+                            🔗
+                          </div>
+                          Link Redirects
+                        </button>
+                      )}
+
+                      {/* Membership Applications */}
+                      {permissions?.membership && (
+                        <button
+                          onClick={() => { setAdminDropdownOpen(false); onMembershipAdmin?.() }}
+                          className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                            📋
+                          </div>
+                          Membership Applications
+                        </button>
+                      )}
 
                       <div className="mx-3 border-t border-gray-100" />
 
@@ -317,7 +401,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setIsMenuOpen(false)} />
+            <div className="absolute inset-0 bg-black/40" onClick={() => setIsMenuOpen(false)} />
             <motion.div
               className="absolute top-16 right-4 left-4 bg-white rounded-2xl shadow-2xl border border-gray-100 p-4"
               initial={{ opacity: 0, y: -10 }}
@@ -326,14 +410,45 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
             >
               <div className="grid grid-cols-2 gap-1 mb-3">
                 {navLinks.map((link) => (
-                  <a
-                    key={link.name}
-                    href={link.href}
-                    className="px-3 py-2.5 rounded-xl text-sm font-medium text-rotary-charcoal/80 hover:text-rotary-blue hover:bg-rotary-blue/5 transition-colors"
-                    onClick={(e) => { handleNavClick(e, link); setIsMenuOpen(false) }}
-                  >
-                    {link.name}
-                  </a>
+                  link.dropdown ? (
+                    <div key={link.name} className="col-span-2">
+                      <button
+                        onClick={() => setMobileLeadershipOpen(o => !o)}
+                        className="flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-sm font-medium text-rotary-charcoal/80 hover:text-rotary-blue hover:bg-rotary-blue/5 transition-colors"
+                      >
+                        {link.name}
+                        <svg
+                          className={`w-3.5 h-3.5 transition-transform duration-200 ${mobileLeadershipOpen ? 'rotate-180' : ''}`}
+                          fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      {mobileLeadershipOpen && (
+                        <div className="grid grid-cols-2 gap-1 pl-2">
+                          {link.dropdown.map((sub) => (
+                            <a
+                              key={sub.name}
+                              href={sub.href}
+                              className="px-3 py-2.5 rounded-xl text-sm font-medium text-rotary-charcoal/70 hover:text-rotary-blue hover:bg-rotary-blue/5 transition-colors"
+                              onClick={(e) => { handleNavClick(e, sub); setIsMenuOpen(false) }}
+                            >
+                              {sub.name}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <a
+                      key={link.name}
+                      href={link.href}
+                      className="px-3 py-2.5 rounded-xl text-sm font-medium text-rotary-charcoal/80 hover:text-rotary-blue hover:bg-rotary-blue/5 transition-colors"
+                      onClick={(e) => { handleNavClick(e, link); setIsMenuOpen(false) }}
+                    >
+                      {link.name}
+                    </a>
+                  )
                 ))}
               </div>
 
@@ -375,7 +490,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                     </button>
                   )}
 
-                  {/* 4. Treasurer Dashboard */}
+                  {/* 4. Finance Dashboard */}
                   {permissions?.treasurer && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onTreasurer?.() }}
@@ -384,7 +499,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                       </svg>
-                      Treasurer Dashboard
+                      Finance Dashboard
                     </button>
                   )}
 
@@ -405,6 +520,26 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-100 transition-colors"
                     >
                       👥 User Management
+                    </button>
+                  )}
+
+                  {/* 7. Link Redirects */}
+                  {permissions?.linkRedirects && (
+                    <button
+                      onClick={() => { setIsMenuOpen(false); onLinkRedirects?.() }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-sky-50 text-sky-700 border border-sky-100 hover:bg-sky-100 transition-colors"
+                    >
+                      🔗 Link Redirects
+                    </button>
+                  )}
+
+                  {/* 8. Membership Applications */}
+                  {permissions?.membership && (
+                    <button
+                      onClick={() => { setIsMenuOpen(false); onMembershipAdmin?.() }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100 transition-colors"
+                    >
+                      📋 Membership Applications
                     </button>
                   )}
 

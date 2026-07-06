@@ -239,7 +239,7 @@ export default function OurTeam({ isAdmin, onBack }) {
     : leaders.filter(l => (l.category || l.team) === filterTeam)
 
   return (
-    <div className="min-h-screen pt-20">
+    <div className="min-h-screen pt-5">
       <div className="section-padding max-w-7xl mx-auto">
 
         {/* Header */}

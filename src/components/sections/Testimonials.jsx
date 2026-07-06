@@ -29,7 +29,7 @@ const DEFAULT_TESTIMONIALS = [
 const inputClass = 'w-full px-3 py-2 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 
 export default function Testimonials({ isAdmin }) {
-  const { data: savedTestimonials, save, remove } = useCollection('testimonials')
+  const { data: savedTestimonials, save, remove } = useCollection('testimonials', [], { live: isAdmin })
   const [current, setCurrent] = useState(0)
   const [editingId, setEditingId] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)

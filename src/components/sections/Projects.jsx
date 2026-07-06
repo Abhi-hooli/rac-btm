@@ -305,8 +305,10 @@ function ProjectCarousel({ projects, onSelect }) {
 }
 
 // ── Homepage Projects Section ─────────────────────────────────────────────────
-export default function Projects({ onViewAll, onViewArchives }) {
-  const { data: projects, loading } = useCollection('projects')
+export default function Projects({ onViewAll }) {
+  // Read-only display — no admin edit UI on the homepage section, so this
+  // never needs to be live; always use the lightweight REST read.
+  const { data: projects, loading } = useCollection('projects', [], { live: false })
   const [selectedProject, setSelectedProject] = useState(null)
 
   const featured = projects.filter(p => p.featured).slice(0, 8)
@@ -359,15 +361,6 @@ export default function Projects({ onViewAll, onViewArchives }) {
             whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
           >
             View All Projects
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-            </svg>
-          </motion.button>
-          <motion.button onClick={onViewArchives}
-            className="btn-secondary inline-flex items-center gap-2 !py-3 !px-6 text-sm"
-            whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-          >
-            Archives
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
             </svg>

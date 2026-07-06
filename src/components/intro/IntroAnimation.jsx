@@ -6,9 +6,9 @@ export default function IntroAnimation({ onComplete, onSkip }) {
 
   useEffect(() => {
     const timers = [
-      setTimeout(() => setPhase(1), 400),
-      setTimeout(() => setPhase(2), 1200),
-      setTimeout(onComplete, 2800)
+      setTimeout(() => setPhase(1), 250),
+      setTimeout(() => setPhase(2), 700),
+      setTimeout(onComplete, 1600)
     ]
     return () => timers.forEach(clearTimeout)
   }, [onComplete])

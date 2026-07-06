@@ -2,8 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useCollection } from '../../hooks/useFirestore'
 import { logAction } from '../../utils/auditLog'
-import { db } from '../../firebase'
-import { collection, getDocs, orderBy, query, deleteDoc, doc } from 'firebase/firestore'
+import { loadFirestore } from '../../firebase'
 
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 
@@ -12,7 +11,7 @@ const CATEGORIES = ['All', 'Newsletter', 'Club News', 'Project Story', 'Event Re
 const emptyForm = {
     title: '', slug: '', excerpt: '', content: '',
     coverImage: '', category: 'Club News', author: '',
-    published: false,
+    published: false, status: 'draft',
 }
 
 // ── Slug generator ────────────────────────────────────────────────────────────
@@ -147,7 +146,7 @@ function PostView({ post, onBack }) {
 }
 
 // ── Admin Editor ──────────────────────────────────────────────────────────────
-function PostEditor({ post, onSave, onCancel }) {
+function PostEditor({ post, isSuperAdmin, onSave, onCancel }) {
     const [form, setForm] = useState(post || emptyForm)
     const [saving, setSaving] = useState(false)
 
@@ -160,14 +159,20 @@ function PostEditor({ post, onSave, onCancel }) {
         }
     }
 
-    const handleSave = async (publish = null) => {
+    // status: 'draft' (not visible to anyone), 'pending' (submitted by a
+    // non-super-admin, awaiting approval), 'published' (live on the site).
+    // Only a Super Admin can move a post into 'published'.
+    const handleSave = async (nextStatus) => {
         if (!form.title || !form.content) return
         setSaving(true)
+        const status = nextStatus || form.status || 'draft'
+        const published = status === 'published'
         const data = {
             ...form,
             slug: form.slug || toSlug(form.title),
-            published: publish !== null ? publish : form.published,
-            publishedAt: (publish || form.published) ? (form.publishedAt || new Date().toISOString()) : null,
+            status,
+            published,
+            publishedAt: published ? (form.publishedAt || new Date().toISOString()) : null,
             updatedAt: new Date().toISOString(),
         }
         await onSave(data)
@@ -239,11 +244,18 @@ function PostEditor({ post, onSave, onCancel }) {
 
                 {/* Action buttons */}
                 <div className="flex flex-wrap gap-3 pt-2">
-                    <button onClick={() => handleSave(true)} disabled={saving || !form.title || !form.content}
-                        className="px-6 py-2.5 rounded-lg bg-rotary-blue text-white font-semibold text-sm hover:bg-rotary-blue-dark disabled:opacity-50 transition-colors">
-                        {saving ? 'Saving...' : '🌐 Publish'}
-                    </button>
-                    <button onClick={() => handleSave(false)} disabled={saving || !form.title}
+                    {isSuperAdmin ? (
+                        <button onClick={() => handleSave('published')} disabled={saving || !form.title || !form.content}
+                            className="px-6 py-2.5 rounded-lg bg-rotary-blue text-white font-semibold text-sm hover:bg-rotary-blue-dark disabled:opacity-50 transition-colors">
+                            {saving ? 'Saving...' : '🌐 Publish'}
+                        </button>
+                    ) : (
+                        <button onClick={() => handleSave('pending')} disabled={saving || !form.title || !form.content}
+                            className="px-6 py-2.5 rounded-lg bg-rotary-blue text-white font-semibold text-sm hover:bg-rotary-blue-dark disabled:opacity-50 transition-colors">
+                            {saving ? 'Saving...' : '📤 Submit for Approval'}
+                        </button>
+                    )}
+                    <button onClick={() => handleSave('draft')} disabled={saving || !form.title}
                         className="px-6 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 text-rotary-charcoal dark:text-white font-semibold text-sm hover:bg-gray-200 dark:hover:bg-white/20 disabled:opacity-50 transition-colors">
                         💾 Save Draft
                     </button>
@@ -252,16 +264,21 @@ function PostEditor({ post, onSave, onCancel }) {
                         Cancel
                     </button>
                 </div>
+                {!isSuperAdmin && (
+                    <p className="text-xs text-rotary-slate dark:text-white/40 mt-3">
+                        Your post will only go live on the public site after a Super Admin approves it.
+                    </p>
+                )}
             </div>
         </motion.div>
     )
 }
 
 // ── Blog Card ─────────────────────────────────────────────────────────────────
-function BlogCard({ post, onClick, onEdit, onDelete, isAdmin }) {
+function BlogCard({ post, onClick, onEdit, onDelete, onApprove, isAdmin, isSuperAdmin }) {
     return (
         <motion.div
-            className="group bg-white dark:bg-rotary-navy-light rounded-2xl border border-gray-100 dark:border-white/5 overflow-hidden hover:shadow-lg dark:hover:shadow-none hover:border-gray-200 dark:hover:border-white/10 transition-all duration-300 cursor-pointer"
+            className="group h-full flex flex-col bg-white dark:bg-rotary-navy-light rounded-2xl border border-gray-100 dark:border-white/5 overflow-hidden hover:shadow-lg dark:hover:shadow-none hover:border-gray-200 dark:hover:border-white/10 transition-all duration-300 cursor-pointer"
             whileHover={{ y: -3 }}
             onClick={() => onClick(post)}
         >
@@ -283,8 +300,13 @@ function BlogCard({ post, onClick, onEdit, onDelete, isAdmin }) {
                         {post.category}
                     </span>
                 </div>
-                {/* Draft badge */}
-                {!post.published && (
+                {/* Draft / pending-approval badge */}
+                {!post.published && post.status === 'pending' && (
+                    <div className="absolute top-3 right-3">
+                        <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-500 text-white">Pending Approval</span>
+                    </div>
+                )}
+                {!post.published && post.status !== 'pending' && (
                     <div className="absolute top-3 right-3">
                         <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-400 text-amber-900">Draft</span>
                     </div>
@@ -297,6 +319,15 @@ function BlogCard({ post, onClick, onEdit, onDelete, isAdmin }) {
                 {/* Admin controls */}
                 {isAdmin && (
                     <div className="absolute bottom-3 right-3 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                        {isSuperAdmin && post.status === 'pending' && (
+                            <button onClick={() => onApprove(post)}
+                                className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center hover:bg-emerald-600 transition-colors shadow"
+                                title="Approve & Publish">
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                            </button>
+                        )}
                         <button onClick={() => onEdit(post)}
                             className="w-7 h-7 rounded-lg bg-white/90 text-rotary-navy flex items-center justify-center hover:bg-white transition-colors shadow">
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -314,14 +345,12 @@ function BlogCard({ post, onClick, onEdit, onDelete, isAdmin }) {
             </div>
 
             {/* Body */}
-            <div className="p-5">
-                <h3 className="font-display font-bold text-lg text-rotary-navy dark:text-white mb-2 line-clamp-2 leading-snug group-hover:text-rotary-blue transition-colors">
+            <div className="p-5 flex-1 flex flex-col">
+                <h3 className="font-display font-bold text-lg text-rotary-navy dark:text-white mb-2 line-clamp-2 leading-snug group-hover:text-rotary-blue transition-colors min-h-[2.5rem]">
                     {post.title}
                 </h3>
-                {post.excerpt && (
-                    <p className="text-sm text-rotary-slate dark:text-white/50 line-clamp-2 leading-relaxed mb-4">{post.excerpt}</p>
-                )}
-                <div className="flex items-center justify-between text-xs text-rotary-slate dark:text-white/30">
+                <p className="text-sm text-rotary-slate dark:text-white/50 line-clamp-2 leading-relaxed mb-4 min-h-[2.5rem]">{post.excerpt || ' '}</p>
+                <div className="mt-auto flex items-center justify-between text-xs text-rotary-slate dark:text-white/30">
                     <span>{post.author || 'Rotaract BTM'}</span>
                     <div className="flex items-center gap-3">
                         <span>{readingTime(post.content || '')} min read</span>
@@ -344,7 +373,8 @@ function SubscriberPanel() {
     const load = async () => {
         setLoading(true)
         try {
-            const snap = await getDocs(query(collection(db, 'subscribers'), orderBy('subscribedAt', 'desc')))
+            const { mod, db } = await loadFirestore()
+            const snap = await mod.getDocs(mod.query(mod.collection(db, 'subscribers'), mod.orderBy('subscribedAt', 'desc')))
             setSubs(snap.docs.map(d => ({ id: d.id, ...d.data() })))
         } finally {
             setLoading(false)
@@ -365,7 +395,8 @@ function SubscriberPanel() {
     const handleDelete = async (id) => {
         if (!window.confirm('Remove this subscriber?')) return
         setDeletingId(id)
-        await deleteDoc(doc(db, 'subscribers', id))
+        const { mod, db } = await loadFirestore()
+        await mod.deleteDoc(mod.doc(db, 'subscribers', id))
         setSubs(prev => prev.filter(s => s.id !== id))
         setDeletingId(null)
     }
@@ -470,7 +501,7 @@ function SubscriberPanel() {
     )
 }
 
-export default function Blog({ isAdmin, onBack }) {
+export default function Blog({ isAdmin, isSuperAdmin, onBack }) {
     const { data: allPosts, loading, save, remove } = useCollection('blogs')
     const [activeCategory, setActiveCategory] = useState('All')
     const [selectedPost, setSelectedPost] = useState(null)
@@ -497,9 +528,18 @@ export default function Blog({ isAdmin, onBack }) {
 
     const handleSave = async (data) => {
         await save({ ...data, id: data.id || Date.now().toString(), createdAt: data.createdAt || new Date().toISOString() })
-        logAction({ admin: 'admin', action: data.published ? 'PUBLISH' : 'DRAFT', module: 'Blog', item: data.title, details: `Blog post ${data.published ? 'published' : 'saved as draft'}` })
+        const action = data.status === 'published' ? 'PUBLISH' : data.status === 'pending' ? 'SUBMIT_FOR_APPROVAL' : 'DRAFT'
+        const details = data.status === 'published' ? 'Blog post published'
+            : data.status === 'pending' ? 'Blog post submitted for Super Admin approval'
+            : 'Blog post saved as draft'
+        logAction({ admin: 'admin', action, module: 'Blog', item: data.title, details })
         setShowEditor(false)
         setEditingPost(null)
+    }
+
+    const handleApprove = async (post) => {
+        await save({ ...post, status: 'published', published: true, publishedAt: post.publishedAt || new Date().toISOString() })
+        logAction({ admin: 'admin', action: 'APPROVE_PUBLISH', module: 'Blog', item: post.title, details: 'Blog post approved and published by Super Admin' })
     }
 
     const handleDelete = async (id) => {
@@ -527,8 +567,8 @@ export default function Blog({ isAdmin, onBack }) {
     }
 
     return (
-        <div className="min-h-screen pt-20">
-            <div className="section-padding max-w-7xl mx-auto pt-8">
+        <div className="min-h-screen pt-5">
+            <div className="section-padding max-w-7xl mx-auto">
 
                 {/* Header */}
                 <motion.div
@@ -566,6 +606,7 @@ export default function Blog({ isAdmin, onBack }) {
                         <div className="mb-10">
                             <PostEditor
                                 post={editingPost}
+                                isSuperAdmin={isSuperAdmin}
                                 onSave={handleSave}
                                 onCancel={() => { setShowEditor(false); setEditingPost(null) }}
                             />
@@ -603,6 +644,7 @@ export default function Blog({ isAdmin, onBack }) {
                     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {filtered.map((post, i) => (
                             <motion.div key={post.id}
+                                className="h-full"
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 transition={{ duration: 0.4, delay: i * 0.05 }}>
@@ -611,7 +653,9 @@ export default function Blog({ isAdmin, onBack }) {
                                     onClick={setSelectedPost}
                                     onEdit={handleEdit}
                                     onDelete={handleDelete}
+                                    onApprove={handleApprove}
                                     isAdmin={isAdmin}
+                                    isSuperAdmin={isSuperAdmin}
                                 />
                             </motion.div>
                         ))}

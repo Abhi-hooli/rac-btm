@@ -51,7 +51,7 @@ export default function JoinCTA({ setCurrentPage }) {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button
               className="!bg-rotary-gold !text-rotary-navy hover:!bg-rotary-gold-light"
-              onClick={() => setCurrentPage('contact')}
+              onClick={() => setCurrentPage('joinForm')}
             >
               Become a Member
             </Button>

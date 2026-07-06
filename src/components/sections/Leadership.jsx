@@ -64,7 +64,7 @@ const roleOrder = ['President', 'Secretary Administration', 'Secretary Operation
 
 // ── President's Message Card ──
 function PresidentCard({ isAdmin }) {
-  const { data: president, save } = useDocument('settings', 'currentPresident', { name: '', image: '', message: '', year: '' })
+  const { data: president, save } = useDocument('settings', 'currentPresident', { name: '', image: '', message: '', year: '' }, { live: isAdmin })
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState(president)
 
@@ -159,8 +159,10 @@ function PresidentCard({ isAdmin }) {
   )
 }
 
-export default function Leadership({ onViewTeam, isAdmin }) {
-  const { data: leaders, loading } = useCollection('leaders')
+export default function Leadership({ onViewTeam, onViewArchives, isAdmin }) {
+  // Read-only display on the homepage — no admin edit UI here (editing
+  // happens on the Our Team page), so always use the lightweight REST read.
+  const { data: leaders, loading } = useCollection('leaders', [], { live: false })
 
   const coreLeaders = leaders.filter(l => (l.category || l.team) === 'core')
   const featured = (coreLeaders.length > 0 ? coreLeaders : leaders.slice(0, 5))
@@ -198,7 +200,7 @@ export default function Leadership({ onViewTeam, isAdmin }) {
         </div>
 
         <motion.div
-          className="text-center mt-10"
+          className="flex flex-wrap justify-center gap-4 mt-10"
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
@@ -210,6 +212,17 @@ export default function Leadership({ onViewTeam, isAdmin }) {
             whileTap={{ scale: 0.98 }}
           >
             Meet the Full Team
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+            </svg>
+          </motion.button>
+          <motion.button
+            onClick={onViewArchives}
+            className="btn-secondary inline-flex items-center gap-2 !py-3 !px-6 text-sm"
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+          >
+            Past Leaders
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
             </svg>

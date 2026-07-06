@@ -44,16 +44,16 @@ async function sendReminderEmail(event) {
     EMAILJS_PUBLIC_KEY
   )
   // Log count to Firestore
-  const { doc, setDoc, getDoc, serverTimestamp } = await import('firebase/firestore')
-  const { db } = await import('../../firebase')
-  const ref  = doc(db, 'emailReminders', event.id)
-  const snap = await getDoc(ref)
+  const { loadFirestore } = await import('../../firebase')
+  const { mod, db } = await loadFirestore()
+  const ref  = mod.doc(db, 'emailReminders', event.id)
+  const snap = await mod.getDoc(ref)
   const prev = snap.exists() ? (snap.data().count || 0) : 0
-  await setDoc(ref, {
+  await mod.setDoc(ref, {
     eventId:    event.id,
     eventTitle: event.title,
     count:      prev + 1,
-    lastSentAt: serverTimestamp(),
+    lastSentAt: mod.serverTimestamp(),
   })
   return result
 }
@@ -66,9 +66,9 @@ function ReminderButton({ event }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const { doc, getDoc } = await import('firebase/firestore')
-        const { db } = await import('../../firebase')
-        const snap = await getDoc(doc(db, 'emailReminders', event.id))
+        const { loadFirestore } = await import('../../firebase')
+        const { mod, db } = await loadFirestore()
+        const snap = await mod.getDoc(mod.doc(db, 'emailReminders', event.id))
         if (snap.exists()) setCount(snap.data().count || 0)
       } catch {}
     }
@@ -152,7 +152,10 @@ function CountdownTimer({ targetDate }) {
 }
 
 function RSVPModal({ event, onClose, onSuccess, existingRsvp }) {
-  const { save: saveRsvp } = useCollection('rsvps')
+  // Only need save() here (RSVP creation is a public write per firestore.rules) —
+  // disable the read/listener entirely so anonymous visitors never trigger a
+  // Firestore SDK download just by opening the RSVP form.
+  const { save: saveRsvp } = useCollection('rsvps', [], { enabled: false })
   const [step, setStep] = useState(existingRsvp ? 'already' : 'form')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -164,20 +167,29 @@ function RSVPModal({ event, onClose, onSuccess, existingRsvp }) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { setError('Please enter a valid email address.'); return }
     setError(''); setLoading(true)
     try {
+      const normalizedEmail = form.email.trim().toLowerCase()
+      // Deterministic ID (eventId + email) instead of a duplicate-check read —
+      // `rsvps` requires auth to read, so an anonymous visitor can't query it.
+      // Firestore rules already distinguish create (public) vs update
+      // (auth-only) based on whether the doc exists, so a second RSVP attempt
+      // with the same event+email naturally gets rejected as permission-denied.
       const rsvpData = {
-        id: `${event.id}_${Date.now()}`, eventId: event.id, eventTitle: event.title, eventDate: event.date,
-        name: form.name.trim(), email: form.email.trim().toLowerCase(), phone: form.phone.trim(),
+        id: `${event.id}_${normalizedEmail}`, eventId: event.id, eventTitle: event.title, eventDate: event.date,
+        name: form.name.trim(), email: normalizedEmail, phone: form.phone.trim(),
         guests: totalAttendees, dietaryNotes: form.dietaryNotes.trim(), status: 'confirmed', rsvpedAt: new Date().toISOString()
       }
-      const { getDocs, query: fsQuery, collection: fsCollection, where } = await import('firebase/firestore')
-      const { db } = await import('../../firebase')
-      const existing = await getDocs(fsQuery(fsCollection(db, 'rsvps'), where('eventId', '==', event.id), where('email', '==', form.email.trim().toLowerCase())))
-      if (!existing.empty) { setError("You've already RSVP'd for this event."); setLoading(false); return }
       await saveRsvp(rsvpData)
       localStorage.setItem(getRsvpStorageKey(event.id), JSON.stringify({ name: form.name.trim(), guests: totalAttendees, rsvpedAt: rsvpData.rsvpedAt }))
       onSuccess && onSuccess(rsvpData)
       setStep('success')
-    } catch (err) { console.error('RSVP error:', err); setError('Something went wrong. Please try again.') }
+    } catch (err) {
+      if (err.code === 'permission-denied') {
+        setError("You've already RSVP'd for this event.")
+      } else {
+        console.error('RSVP error:', err)
+        setError('Something went wrong. Please try again.')
+      }
+    }
     finally { setLoading(false) }
   }
 
@@ -378,8 +390,8 @@ function EventModal({ event, onClose, rsvpCount }) {
   )
 }
 
-export default function Events({ isAdmin }) {
-  const { data: events, loading: eventsLoading, save, remove } = useCollection('events')
+export default function Events({ isAdmin, setCurrentPage }) {
+  const { data: events, loading: eventsLoading, save, remove } = useCollection('events', [], { live: isAdmin })
   const { data: rsvps, loading: rsvpsLoading } = useCollection('rsvps', [], isAdmin)
   const [selectedEvent,  setSelectedEvent]  = useState(null)
   const [rsvpEvent,      setRsvpEvent]      = useState(null)
@@ -562,6 +574,26 @@ export default function Events({ isAdmin }) {
             )
           })}
         </div>
+
+        {setCurrentPage && (
+          <motion.div
+            className="text-center mt-14"
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+          >
+            <p className="text-rotary-slate dark:text-white/50 mb-4">Want to help plan and run events like these?</p>
+            <button
+              onClick={() => setCurrentPage('joinForm')}
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-rotary-blue text-white font-semibold text-sm hover:bg-rotary-blue-dark transition-colors shadow-sm"
+            >
+              Join Rotaract
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+              </svg>
+            </button>
+          </motion.div>
+        )}
       </div>
 
       <AnimatePresence>

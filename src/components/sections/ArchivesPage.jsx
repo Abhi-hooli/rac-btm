@@ -239,29 +239,31 @@ export default function ArchivesPage({ isAdmin, onBack }) {
   }
 
   return (
-    <div className="min-h-screen pt-20">
+    <div className="min-h-screen pt-5">
       <div className="section-padding max-w-7xl mx-auto">
 
         {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
-          <button onClick={onBack} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <div className="flex-1">
-            <h1 className="heading-lg">Club <span className="text-gradient">Archives</span></h1>
-            <p className="text-rotary-slate dark:text-white/50 text-sm mt-1">{sorted.length} year{sorted.length !== 1 ? 's' : ''} archived</p>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-8">
+          <div className="flex items-center gap-4 min-w-0">
+            <button onClick={onBack} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 transition-colors shrink-0">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div className="min-w-0">
+              <h1 className="heading-lg truncate">Club <span className="text-gradient">Archives</span></h1>
+              <p className="text-rotary-slate dark:text-white/50 text-sm mt-1">{sorted.length} year{sorted.length !== 1 ? 's' : ''} archived</p>
+            </div>
           </div>
 
           {isAdmin && (
-            <div className="flex gap-2 shrink-0">
+            <div className="flex flex-wrap gap-2 sm:ml-auto sm:shrink-0">
               {selected && (
                 <button
                   onClick={() => { setEditingYear(selected); setShowForm(true) }}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-sm font-medium text-rotary-charcoal dark:text-white/60 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                  <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                   Edit Year
                 </button>
               )}
@@ -269,7 +271,7 @@ export default function ArchivesPage({ isAdmin, onBack }) {
                 onClick={() => { setEditingYear(null); setShowForm(true) }}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-rotary-blue text-white text-sm font-semibold hover:bg-rotary-blue-dark transition-colors"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                 Add Year
               </button>
             </div>
@@ -333,7 +335,7 @@ export default function ArchivesPage({ isAdmin, onBack }) {
                           <img src={selected.presidentImage} alt={selected.presidentName} className="w-full h-full object-cover min-h-[280px]" loading="lazy" />
                         </div>
                       )}
-                      <div className={`p-8 ${selected.presidentImage ? 'md:col-span-2' : 'md:col-span-3'}`}>
+                      <div className={`p-6 sm:p-8 ${selected.presidentImage ? 'md:col-span-2' : 'md:col-span-3'}`}>
                         <svg className="w-10 h-10 text-rotary-gold/40 mb-4" fill="currentColor" viewBox="0 0 24 24">
                           <path d="M14.017 21v-7.391c0-5.704 3.731-9.57 8.983-10.609l.995 2.151c-2.432.917-3.995 3.638-3.995 5.849h4v10h-9.983zm-14.017 0v-7.391c0-5.704 3.748-9.57 9-10.609l.996 2.151c-2.433.917-3.996 3.638-3.996 5.849h3.983v10h-9.983z" />
                         </svg>

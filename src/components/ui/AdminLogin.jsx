@@ -44,6 +44,8 @@ export default function AdminLogin({ isOpen, onClose, onLogin }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+          style={{ willChange: 'opacity' }}
         >
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
           <motion.div

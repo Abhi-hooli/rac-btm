@@ -134,7 +134,7 @@ function ImageEditPanel({ currentUrl, onSave, onClose }) {
 }
 
 export default function Impact({ isAdmin }) {
-  const { data: settings, save: saveSettings } = useCollection('settings')
+  const { data: settings, save: saveSettings } = useCollection('settings', [], { live: isAdmin })
   const scrollRef   = useRef(null)
   const [selectedArea, setSelectedArea] = useState(null)
   const [showImageEdit, setShowImageEdit] = useState(false)

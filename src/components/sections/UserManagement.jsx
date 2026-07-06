@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore'
-import { db, createAuthUser, sendSetupEmail } from '../../firebase'
+import { loadFirestore, createAuthUser, sendSetupEmail } from '../../firebase'
+import { useCollection } from '../../hooks/useFirestore'
 
 // ⚠️ ADJUST THESE KEYS to match what your dashboards check, e.g. user.permissions.treasurer
 const PERMISSION_SECTIONS = [
+  { key: 'homepage', label: 'Homepage Content' },
+  { key: 'events', label: 'Events & Calendar' },
+  { key: 'projects', label: 'Projects & Reports' },
   { key: 'analytics', label: 'Club Analytics' },
   { key: 'attendance', label: 'Attendance Tracker' },
   { key: 'mom', label: 'MoM Tracker' },
-  { key: 'treasurer', label: 'Treasurer Portal' },
+  { key: 'treasurer', label: 'Finance Dashboard' },
   { key: 'rsvp', label: 'RSVP Manager' },
   { key: 'gallery', label: 'Gallery' },
-  { key: 'userManagement', label: 'User Management' }
+  { key: 'linkRedirects', label: 'Link Redirects' },
+  { key: 'userManagement', label: 'User Management' },
+  { key: 'membership', label: 'Membership Applications' }
 ]
 
 const emptyPermissions = () =>
@@ -24,7 +29,7 @@ const ROLE_PRESETS = {
   president: { label: 'President', perms: allPermissions() },
   secretary: {
     label: 'Secretary',
-    perms: { ...emptyPermissions(), rsvp: true, attendance: true, mom: true, gallery: true }
+    perms: { ...emptyPermissions(), rsvp: true, attendance: true, mom: true, gallery: true, membership: true, events: true }
   },
   treasurer: {
     label: 'Treasurer',
@@ -34,14 +39,28 @@ const ROLE_PRESETS = {
     label: 'SAA',
     perms: { ...emptyPermissions(), attendance: true }
   },
+  editor: {
+    label: 'Editor',
+    perms: { ...emptyPermissions(), gallery: true, homepage: true }
+  },
+  membershipDirector: {
+    label: 'Membership Director',
+    perms: { ...emptyPermissions(), membership: true }
+  },
+  prTeam: {
+    label: 'PR Team',
+    perms: { ...emptyPermissions(), gallery: true, linkRedirects: true, events: true, projects: true }
+  },
   admin: { label: 'Admin', perms: allPermissions() }
 }
 
 const SUPER_ADMIN_EMAIL = null // no longer needed
 
 export default function UserManagement({ onBack }) {
+  const { data: leaders } = useCollection('leaders')
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
+  const [selectedMemberId, setSelectedMemberId] = useState('')
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
   const [newRole, setNewRole] = useState('secretary')
@@ -55,7 +74,8 @@ export default function UserManagement({ onBack }) {
 
   const loadUsers = async () => {
     setLoading(true)
-    const snap = await getDocs(collection(db, 'users'))
+    const { mod, db } = await loadFirestore()
+    const snap = await mod.getDocs(mod.collection(db, 'users'))
     setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     setLoading(false)
   }
@@ -73,7 +93,8 @@ export default function UserManagement({ onBack }) {
       setError('Password must be at least 6 characters.')
       return
     }
-    const dup = await getDocs(query(collection(db, 'users'), where('email', '==', email)))
+    const { mod, db } = await loadFirestore()
+    const dup = await mod.getDocs(mod.query(mod.collection(db, 'users'), mod.where('email', '==', email)))
     if (!dup.empty) {
       setError('A user with this email already exists.')
       return
@@ -88,7 +109,7 @@ export default function UserManagement({ onBack }) {
       setSaving(false)
       return
     }
-    await addDoc(collection(db, 'users'), {
+    await mod.addDoc(mod.collection(db, 'users'), {
       email,
       name: newName.trim(),
       role: ROLE_PRESETS[newRole].label,
@@ -98,6 +119,7 @@ export default function UserManagement({ onBack }) {
     setCreatedUser({ email, password: newPassword })
     setCopied(false)
     setEmailSent(false)
+    setSelectedMemberId('')
     setNewEmail('')
     setNewName('')
     setNewPassword('')
@@ -105,15 +127,23 @@ export default function UserManagement({ onBack }) {
     loadUsers()
   }
 
+  const selectMember = (memberId) => {
+    setSelectedMemberId(memberId)
+    const member = leaders.find(l => l.id === memberId)
+    if (member) setNewName(member.name)
+  }
+
   const togglePermission = async (user, key) => {
     const updated = { ...user.permissions, [key]: !user.permissions?.[key] }
-    await updateDoc(doc(db, 'users', user.id), { permissions: updated })
+    const { mod, db } = await loadFirestore()
+    await mod.updateDoc(mod.doc(db, 'users', user.id), { permissions: updated })
     setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, permissions: updated } : u)))
   }
 
   const applyPreset = async (user, presetKey) => {
     const perms = { ...ROLE_PRESETS[presetKey].perms }
-    await updateDoc(doc(db, 'users', user.id), {
+    const { mod, db } = await loadFirestore()
+    await mod.updateDoc(mod.doc(db, 'users', user.id), {
       permissions: perms,
       role: ROLE_PRESETS[presetKey].label
     })
@@ -127,7 +157,8 @@ export default function UserManagement({ onBack }) {
     const id = confirmDelete.id
     setConfirmDelete(null)
     setUsers(prev => prev.filter(u => u.id !== id))
-    await deleteDoc(doc(db, 'users', id))
+    const { mod, db } = await loadFirestore()
+    await mod.deleteDoc(mod.doc(db, 'users', id))
   }
 
   return (
@@ -160,6 +191,21 @@ export default function UserManagement({ onBack }) {
         {/* Add user */}
         <div className="bg-gray-50 dark:bg-rotary-navy-light rounded-2xl p-6 mb-10">
           <h3 className="font-display font-semibold mb-4">Add User</h3>
+          <div className="mb-3">
+            <select
+              value={selectedMemberId}
+              onChange={e => selectMember(e.target.value)}
+              className="w-full sm:w-auto px-4 py-3 rounded-xl bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 focus:outline-none focus:border-rotary-blue"
+            >
+              <option value="">Select from member database…</option>
+              {leaders.map(l => (
+                <option key={l.id} value={l.id}>{l.name}{l.role ? ` — ${l.role}` : ''}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 dark:text-white/40 mt-1.5">
+              Pick a member to fill their name, or type it manually below.
+            </p>
+          </div>
           <div className="grid sm:grid-cols-5 gap-3">
             <input
               type="text"
@@ -217,6 +263,7 @@ export default function UserManagement({ onBack }) {
           <div className="space-y-6">
             {users.map(user => {
               const isSuperAdmin = user.isSuperAdmin === true
+              const matchedPresetKey = Object.entries(ROLE_PRESETS).find(([, v]) => v.label === user.role)?.[0] || ''
               return (
                 <div key={user.id} className="bg-gray-50 dark:bg-rotary-navy-light rounded-2xl p-6">
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -235,15 +282,12 @@ export default function UserManagement({ onBack }) {
                     </div>
                     <div className="flex items-center gap-2">
                       <select
-                        defaultValue=""
-                        onChange={e => {
-                          if (e.target.value) applyPreset(user, e.target.value)
-                          e.target.value = ''
-                        }}
+                        value={matchedPresetKey}
+                        onChange={e => { if (e.target.value) applyPreset(user, e.target.value) }}
                         disabled={isSuperAdmin}
                         className="px-3 py-2 text-sm rounded-xl bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 disabled:opacity-40"
                       >
-                        <option value="" disabled>Apply preset…</option>
+                        {!matchedPresetKey && <option value="" disabled>Custom / Mixed access</option>}
                         {Object.entries(ROLE_PRESETS).map(([k, v]) => (
                           <option key={k} value={k}>{v.label}</option>
                         ))}

@@ -1,9 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { db } from '../../firebase'
-import {
-  collection, query, orderBy, onSnapshot, deleteDoc, doc
-} from 'firebase/firestore'
+import { loadFirestore } from '../../firebase'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -166,7 +163,8 @@ function EventRsvpPanel({ event, rsvps }) {
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return
     try {
-      await deleteDoc(doc(db, 'rsvps', deleteTarget.id))
+      const { mod, db } = await loadFirestore()
+      await mod.deleteDoc(mod.doc(db, 'rsvps', deleteTarget.id))
     } catch (err) {
       console.error('Delete RSVP error:', err)
     }
@@ -388,19 +386,31 @@ export default function EventRsvpAdmin({ isAdmin, onBack }) {
   const [filterType, setFilterType] = useState('All')
 
   useEffect(() => {
-    const q = query(collection(db, 'events'), orderBy('date', 'desc'))
-    return onSnapshot(q, snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      setEvents(data)
-      if (!selectedEventId && data.length > 0) setSelectedEventId(data[0].id)
-      setLoading(false)
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      const q = mod.query(mod.collection(db, 'events'), mod.orderBy('date', 'desc'))
+      unsub = mod.onSnapshot(q, snap => {
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        setEvents(data)
+        if (!selectedEventId && data.length > 0) setSelectedEventId(data[0].id)
+        setLoading(false)
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   useEffect(() => {
-    return onSnapshot(collection(db, 'rsvps'), snap => {
-      setRsvps(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      unsub = mod.onSnapshot(mod.collection(db, 'rsvps'), snap => {
+        setRsvps(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   const totalRsvps = rsvps.length

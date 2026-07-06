@@ -101,9 +101,14 @@ export default function ClubAnalyticsDashboard({ onBack, isAdmin }) {
   const totalMembers   = leaders.length
   const totalProjects  = projects.length
 
+  const leaderIds = new Set(leaders.map(l => l.id))
+
   const avgAttendance = (() => {
     if (!meetings.length || !leaders.length) return 0
-    const total = meetings.reduce((sum, m) => sum + ((m.presentIds || []).length / leaders.length) * 100, 0)
+    const total = meetings.reduce((sum, m) => {
+      const presentCount = (m.presentIds || []).filter(id => leaderIds.has(id)).length
+      return sum + (presentCount / leaders.length) * 100
+    }, 0)
     return Math.round(total / meetings.length)
   })()
 
@@ -140,7 +145,7 @@ export default function ClubAnalyticsDashboard({ onBack, isAdmin }) {
       const key = `${d.getFullYear()}-${d.getMonth()}`
       if (!byMonth[key]) byMonth[key] = { month: months[d.getMonth()], total: 0, present: 0 }
       byMonth[key].total += leaders.length
-      byMonth[key].present += (m.presentIds || []).length
+      byMonth[key].present += (m.presentIds || []).filter(id => leaderIds.has(id)).length
     })
     return Object.values(byMonth)
       .map(b => ({ month: b.month, pct: b.total > 0 ? Math.round((b.present / b.total) * 100) : 0 }))

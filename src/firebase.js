@@ -1,6 +1,4 @@
 import { initializeApp, getApps } from 'firebase/app'
-import { getFirestore, collection, query, where, getDocs } from 'firebase/firestore'
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'firebase/auth'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -12,17 +10,42 @@ const firebaseConfig = {
 }
 
 const app = initializeApp(firebaseConfig)
-export const db = getFirestore(app)
-export const auth = getAuth(app)
 
-const ALL_PERMS = { analytics: true, attendance: true, mom: true, treasurer: true, rsvp: true, userManagement: true, gallery: true }
+const ALL_PERMS = { analytics: true, attendance: true, mom: true, treasurer: true, rsvp: true, userManagement: true, gallery: true, linkRedirects: true, membership: true, homepage: true, events: true, projects: true }
+
+// firebase/auth and firebase/firestore are large chunks (~150-200kB and
+// ~600kB) only needed once someone opens the admin portal — load them on
+// demand instead of blocking the initial app render for every anonymous
+// visitor. Public pages read data via the lightweight REST helpers in
+// src/lib/firestoreRest.js instead.
+let authModPromise
+function loadAuth() {
+  if (!authModPromise) {
+    authModPromise = import('firebase/auth').then(mod => ({ mod, auth: mod.getAuth(app) }))
+  }
+  return authModPromise
+}
+
+let firestoreModPromise
+export function loadFirestore() {
+  if (!firestoreModPromise) {
+    firestoreModPromise = import('firebase/firestore').then(mod => ({ mod, db: mod.getFirestore(app) }))
+  }
+  return firestoreModPromise
+}
+
+export async function subscribeAuthState(callback) {
+  const { mod, auth } = await loadAuth()
+  return mod.onAuthStateChanged(auth, callback)
+}
 
 export async function firebaseAdminLogin(email, password) {
-  const result = await signInWithEmailAndPassword(auth, email, password)
-  const q = query(collection(db, 'users'), where('email', '==', result.user.email))
-  const snap = await getDocs(q)
+  const [{ mod, auth }, { mod: fsMod, db }] = await Promise.all([loadAuth(), loadFirestore()])
+  const result = await mod.signInWithEmailAndPassword(auth, email, password)
+  const q = fsMod.query(fsMod.collection(db, 'users'), fsMod.where('email', '==', result.user.email))
+  const snap = await fsMod.getDocs(q)
   if (snap.empty) {
-    await signOut(auth)
+    await mod.signOut(auth)
     throw new Error('Unauthorized. Contact the club admin for access.')
   }
   const userData = snap.docs[0].data()
@@ -33,17 +56,20 @@ export async function firebaseAdminLogin(email, password) {
 }
 
 export async function createAuthUser(email, password) {
+  const { mod } = await loadAuth()
   const secondaryApp = getApps().find(a => a.name === 'Secondary')
     || initializeApp(firebaseConfig, 'Secondary')
-  const secondaryAuth = getAuth(secondaryApp)
-  await createUserWithEmailAndPassword(secondaryAuth, email, password)
-  await signOut(secondaryAuth)
+  const secondaryAuth = mod.getAuth(secondaryApp)
+  await mod.createUserWithEmailAndPassword(secondaryAuth, email, password)
+  await mod.signOut(secondaryAuth)
 }
 
 export async function sendSetupEmail(email) {
-  await sendPasswordResetEmail(auth, email)
+  const { mod, auth } = await loadAuth()
+  await mod.sendPasswordResetEmail(auth, email)
 }
 
 export async function firebaseAdminLogout() {
-  await signOut(auth)
+  const { mod, auth } = await loadAuth()
+  await mod.signOut(auth)
 }

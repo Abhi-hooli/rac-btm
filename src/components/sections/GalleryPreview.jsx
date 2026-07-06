@@ -2,7 +2,8 @@ import { motion } from 'framer-motion'
 import { useCollection } from '../../hooks/useFirestore'
 
 export default function GalleryPreview({ onViewAll }) {
-  const { data: albums, loading } = useCollection('gallery')
+  // Read-only display — always use the lightweight REST read, no SDK needed.
+  const { data: albums, loading } = useCollection('gallery', [], { live: false })
 
   if (loading || albums.length === 0) return null
 

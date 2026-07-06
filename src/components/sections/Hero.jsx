@@ -6,7 +6,7 @@ import { useDocument } from '../../hooks/useFirestore'
 export default function Hero({ setCurrentPage, isAdmin }) {
   const { data: heroSettings, save: saveHero } = useDocument('settings', 'hero', {
     image: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&q=80'
-  })
+  }, { live: isAdmin })
   const [showEdit, setShowEdit] = useState(false)
   const [newUrl, setNewUrl] = useState('')
 
@@ -72,7 +72,7 @@ export default function Hero({ setCurrentPage, isAdmin }) {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.5 }}
           >
-            <Button onClick={() => setCurrentPage('contact')}>
+            <Button onClick={() => setCurrentPage('joinForm')}>
               Get Involved
             </Button>
 

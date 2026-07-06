@@ -6,6 +6,26 @@ import { logAction } from '../../utils/auditLog'
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 const cardClass  = 'bg-white dark:bg-rotary-navy-light rounded-2xl border border-gray-100 dark:border-white/8 p-6'
 
+// Rotating secondary accent per month — keeps the brand pink as primary but gives
+// each issue its own identity instead of every month looking visually identical.
+const ISSUE_ACCENTS = [
+  { name: 'Gold',    hex: '#F7A81B' },
+  { name: 'Teal',    hex: '#0d9488' },
+  { name: 'Violet',  hex: '#7c3aed' },
+  { name: 'Sky',     hex: '#0284c7' },
+  { name: 'Emerald', hex: '#059669' },
+  { name: 'Amber',   hex: '#d97706' },
+  { name: 'Rose',    hex: '#e11d48' },
+  { name: 'Indigo',  hex: '#4f46e5' },
+  { name: 'Lime',    hex: '#65a30d' },
+  { name: 'Cyan',    hex: '#0891b2' },
+  { name: 'Fuchsia', hex: '#c026d3' },
+  { name: 'Orange',  hex: '#ea580c' },
+]
+function getIssueAccent(monthNum) {
+  return ISSUE_ACCENTS[(monthNum - 1) % ISSUE_ACCENTS.length]
+}
+
 // Auto Rotary monthly theme by month number
 const ROTARY_MONTHLY_THEMES = {
   1:  'Vocational Service Month',
@@ -59,9 +79,11 @@ function buildNewsletterHTML(data) {
     projects, events, stats,
     birthdays, anniversaries,
     sections, closingNote,
+    accent = ISSUE_ACCENTS[0], galleryPhotos = [], spotlight,
   } = data
 
   const show = k => sections[k] !== false
+  const A = accent.hex
 
   const ord = n => {
     const s = ['th','st','nd','rd'], v = n % 100
@@ -87,18 +109,54 @@ function buildNewsletterHTML(data) {
       <div style="font-size:26px;color:#D31145;line-height:0.5;margin-top:8px;text-align:right;font-family:'Georgia',serif;opacity:0.35;">"</div>
     </div>`
 
-  const projectCards = projects.slice(0, 6).map(p => `
-    <div style="margin-bottom:28px;border-bottom:1px solid #f0f0f0;padding-bottom:28px;">
-      ${p.newsletterImage ? `<div style="border-radius:10px;overflow:hidden;margin-bottom:14px;height:180px;"><img src="${p.newsletterImage}" crossorigin="anonymous" alt="${p.title}" style="width:100%;height:100%;object-fit:cover;" /></div>` : ''}
-      <div style="display:inline-block;background:#fff0f3;color:#D31145;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:3px 10px;border-radius:20px;margin-bottom:8px;">${p.avenue || p.category || 'Service'}</div>
-      <div style="font-size:17px;font-weight:800;color:#1a1a2e;line-height:1.3;margin-bottom:6px;">${p.title}</div>
-      ${p.description ? `<div style="font-size:13px;color:#555;line-height:1.75;margin-bottom:10px;">${p.description.slice(0, 220)}${p.description.length > 220 ? '…' : ''}</div>` : ''}
-      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+  // Magazine-style: first project runs as a full feature story, the rest as a 2-col grid.
+  const [featureProject, ...gridProjects] = projects.slice(0, 6)
+  const projMeta = p => `
         ${p.participants  ? `<div style="font-size:12px;color:#888;"><span style="color:#D31145;margin-right:4px;">●</span>${p.participants} Participants</div>` : ''}
         ${p.volunteerHours? `<div style="font-size:12px;color:#888;"><span style="color:#D31145;margin-right:4px;">●</span>${p.volunteerHours}h Volunteered</div>` : ''}
-        ${p.beneficiaries ? `<div style="font-size:12px;color:#888;"><span style="color:#D31145;margin-right:4px;">●</span>${p.beneficiaries} Beneficiaries</div>` : ''}
+        ${p.beneficiaries ? `<div style="font-size:12px;color:#888;"><span style="color:#D31145;margin-right:4px;">●</span>${p.beneficiaries} Beneficiaries</div>` : ''}`
+
+  const featureCard = featureProject ? `
+    <div style="margin-bottom:28px;">
+      ${featureProject.newsletterImage ? `<div style="border-radius:12px;overflow:hidden;margin-bottom:16px;height:220px;"><img src="${featureProject.newsletterImage}" crossorigin="anonymous" alt="${featureProject.title}" style="width:100%;height:100%;object-fit:cover;" /></div>` : ''}
+      <div style="display:inline-block;background:#fff0f3;color:#D31145;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:3px 10px;border-radius:20px;margin-bottom:10px;">${featureProject.avenue || featureProject.category || 'Service'} · Feature Story</div>
+      <div style="font-family:'Sora',sans-serif;font-size:24px;font-weight:900;color:#1a1a2e;line-height:1.2;margin-bottom:10px;">${featureProject.title}</div>
+      ${featureProject.description ? `<div style="font-size:13.5px;color:#555;line-height:1.85;margin-bottom:12px;">${featureProject.description.slice(0, 340)}${featureProject.description.length > 340 ? '…' : ''}</div>` : ''}
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">${projMeta(featureProject)}</div>
+    </div>` : ''
+
+  const gridCards = gridProjects.length > 0 ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+      ${gridProjects.map(p => `
+      <div>
+        ${p.newsletterImage ? `<div style="border-radius:10px;overflow:hidden;margin-bottom:10px;height:110px;"><img src="${p.newsletterImage}" crossorigin="anonymous" alt="${p.title}" style="width:100%;height:100%;object-fit:cover;" /></div>` : ''}
+        <div style="display:inline-block;background:#fff0f3;color:#D31145;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;padding:2px 8px;border-radius:20px;margin-bottom:6px;">${p.avenue || p.category || 'Service'}</div>
+        <div style="font-size:14px;font-weight:800;color:#1a1a2e;line-height:1.3;margin-bottom:5px;">${p.title}</div>
+        ${p.description ? `<div style="font-size:11.5px;color:#666;line-height:1.6;">${p.description.slice(0, 110)}${p.description.length > 110 ? '…' : ''}</div>` : ''}
+      </div>`).join('')}
+    </div>` : ''
+
+  const projectCards = featureCard + gridCards
+
+  // ── Gallery Spotlight — recent photos from the club Gallery ──
+  const galleryBlock = galleryPhotos.length > 0 ? `
+    <div style="display:grid;grid-template-columns:repeat(${Math.min(galleryPhotos.length, 3)},1fr);gap:10px;">
+      ${galleryPhotos.slice(0, 3).map(g => `
+      <div style="border-radius:10px;overflow:hidden;height:130px;"><img src="${g.url || g.image}" crossorigin="anonymous" alt="${g.caption || ''}" style="width:100%;height:100%;object-fit:cover;" /></div>`).join('')}
+    </div>` : ''
+
+  // ── Member Spotlight — editorial feature on one member ──
+  const spotlightBlock = spotlight?.name && spotlight?.blurb ? `
+    <div style="display:flex;gap:22px;align-items:flex-start;">
+      ${avatarDiv(spotlight.name, spotlight.photo, 96, `linear-gradient(135deg,${A},#1a1a2e)`)}
+      <div style="flex:1;">
+        <div style="font-family:'Sora',sans-serif;font-size:20px;font-weight:900;color:#1a1a2e;margin-bottom:2px;">${spotlight.name}</div>
+        ${spotlight.role ? `<div style="font-size:12px;color:${A};font-weight:700;margin-bottom:10px;">${spotlight.role}</div>` : ''}
+        <div style="position:relative;padding:16px 20px;background:#fafafa;border-radius:12px;border-left:4px solid ${A};">
+          <div style="font-size:13px;color:#333;line-height:1.85;white-space:pre-line;font-style:italic;">${spotlight.blurb}</div>
+        </div>
       </div>
-    </div>`).join('')
+    </div>` : ''
 
   const eventCards = events.slice(0, 5).map(e => {
     const dt = new Date(e.date)
@@ -175,18 +233,39 @@ function buildNewsletterHTML(data) {
     <div style="font-family:'Sora',sans-serif;font-size:34px;font-weight:900;color:#fff;line-height:1.1;margin-bottom:6px;">Rotaract<br>Bengaluru BTM</div>
     <div style="font-size:14px;color:rgba(255,255,255,0.5);margin-bottom:14px;">${clubTagline || 'Create. Lead. Inspire.'}</div>
     <div style="display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);border-radius:20px;padding:6px 14px;">
-      <div style="width:6px;height:6px;border-radius:50%;background:#F7A81B;"></div>
+      <div style="width:6px;height:6px;border-radius:50%;background:${A};"></div>
       <div style="font-size:12px;color:rgba(255,255,255,0.8);font-weight:600;">${month} ${year} Edition</div>
     </div>
   </div>
 </div>
 
+<!-- IN THIS ISSUE -->
+<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:14px 40px;background:#f8f9fa;border-bottom:1px solid #f0f0f0;">
+  <div style="font-size:9px;color:#999;letter-spacing:2px;text-transform:uppercase;font-weight:700;">In This Issue</div>
+  ${[
+    show('presidentCorner') && presidentMessage ? 'Messages' : '',
+    show('spotlight') && spotlight?.name ? 'Spotlight' : '',
+    show('projects') && projects.length > 0 ? 'Projects' : '',
+    show('events') && events.length > 0 ? 'Events' : '',
+    show('gallery') && galleryPhotos.length > 0 ? 'Gallery' : '',
+    show('celebrations') && (birthdays.length > 0 || anniversaries.length > 0) ? 'Celebrations' : '',
+  ].filter(Boolean).map(t => `<span style="font-size:11px;color:#555;font-weight:600;">· ${t}</span>`).join('')}
+</div>
+
 ${show('rotaryTheme') && rotaryTheme ? `
 <!-- ROTARY THEME -->
-<div class="no-break" style="background:linear-gradient(135deg,#F7A81B,#f59e0b);padding:18px 40px;">
+<div class="no-break" style="background:linear-gradient(135deg,${A},#1a1a2e);padding:18px 40px;">
   <div style="font-size:9px;color:rgba(255,255,255,0.75);letter-spacing:2.5px;text-transform:uppercase;font-weight:700;margin-bottom:4px;">✦ Rotary Monthly Theme — ${month}</div>
   <div style="font-family:'Sora',sans-serif;font-size:17px;font-weight:800;color:#fff;">"${rotaryTheme}"</div>
   ${rotaryThemeNote ? `<div style="font-size:12px;color:rgba(255,255,255,0.75);margin-top:4px;">${rotaryThemeNote}</div>` : ''}
+</div>` : ''}
+
+${show('spotlight') && spotlightBlock ? `
+<!-- MEMBER SPOTLIGHT -->
+<div class="no-break" style="padding:36px 40px;border-bottom:1px solid #f0f0f0;background:#fdf9f4;">
+  <div style="font-size:9px;color:${A};font-weight:700;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:6px;">Member Spotlight</div>
+  <div style="font-family:'Sora',sans-serif;font-size:22px;font-weight:800;color:#1a1a2e;margin-bottom:20px;">This Month, We Celebrate</div>
+  ${spotlightBlock}
 </div>` : ''}
 
 ${show('stats') ? `
@@ -222,6 +301,14 @@ ${show('events') && events.length > 0 ? `
   <div style="font-size:9px;color:#D31145;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:6px;">Don't Miss</div>
   <div style="font-family:'Sora',sans-serif;font-size:22px;font-weight:800;color:#1a1a2e;margin-bottom:16px;">Upcoming Events</div>
   ${eventCards}
+</div>` : ''}
+
+${show('gallery') && galleryBlock ? `
+<!-- GALLERY SPOTLIGHT -->
+<div class="no-break" style="padding:36px 40px;border-bottom:1px solid #f0f0f0;">
+  <div style="font-size:9px;color:${A};font-weight:700;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:6px;">Snapshots</div>
+  <div style="font-family:'Sora',sans-serif;font-size:22px;font-weight:800;color:#1a1a2e;margin-bottom:16px;">Gallery Spotlight</div>
+  ${galleryBlock}
 </div>` : ''}
 
 ${show('celebrations') && (birthdays.length > 0 || anniversaries.length > 0) ? `
@@ -271,8 +358,9 @@ ${closingNote ? `
 
 // ── A4 Magazine PDF builder ────────────────────────────────────────────────────
 function buildPDFHTML(data) {
-  const { month, year, heroImage, clubTagline, rotaryTheme, rotaryThemeNote, presidentName, presidentTitle, presidentPhoto, presidentMessage, additionalMessages, projects, events, stats, birthdays, anniversaries, sections, closingNote } = data
+  const { month, year, heroImage, clubTagline, rotaryTheme, rotaryThemeNote, presidentName, presidentTitle, presidentPhoto, presidentMessage, additionalMessages, projects, events, stats, birthdays, anniversaries, sections, closingNote, accent = ISSUE_ACCENTS[0], galleryPhotos = [], spotlight } = data
   const show = k => sections[k] !== false
+  const A = accent.hex
 
   const ord = n => { const s=['th','st','nd','rd'],v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]) }
 
@@ -296,17 +384,48 @@ function buildPDFHTML(data) {
       </div>
     </div>`
 
-  const projCards = projects.slice(0,6).map(p=>`
-    <div style="page-break-inside:avoid;break-inside:avoid;margin-bottom:24px;border-bottom:1px solid #f0f0f0;padding-bottom:24px;">
-      ${p.newsletterImage?`<div style="height:160px;border-radius:8px;overflow:hidden;margin-bottom:12px;"><img src="${p.newsletterImage}" crossorigin="anonymous" style="width:100%;height:100%;object-fit:cover;" /></div>`:''}
-      <div style="display:inline-block;background:#fff0f3;color:#D31145;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:2px 8px;border-radius:20px;margin-bottom:6px;">${p.avenue||p.category||'Service'}</div>
-      <div style="font-family:'Sora',sans-serif;font-size:15px;font-weight:800;color:#1a1a2e;margin-bottom:5px;">${p.title}</div>
-      ${p.description?`<div style="font-size:12px;color:#555;line-height:1.7;">${p.description.slice(0,200)}${p.description.length>200?'…':''}</div>`:''}
+  const [pdfFeature, ...pdfGrid] = projects.slice(0, 6)
+  const pdfFeatureCard = pdfFeature ? `
+    <div style="page-break-inside:avoid;break-inside:avoid;margin-bottom:26px;">
+      ${pdfFeature.newsletterImage?`<div style="height:220px;border-radius:10px;overflow:hidden;margin-bottom:14px;"><img src="${pdfFeature.newsletterImage}" crossorigin="anonymous" style="width:100%;height:100%;object-fit:cover;" /></div>`:''}
+      <div style="display:inline-block;background:#fff0f3;color:#D31145;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:2px 8px;border-radius:20px;margin-bottom:8px;">${pdfFeature.avenue||pdfFeature.category||'Service'} · Feature Story</div>
+      <div style="font-family:'Sora',sans-serif;font-size:20px;font-weight:900;color:#1a1a2e;margin-bottom:8px;">${pdfFeature.title}</div>
+      ${pdfFeature.description?`<div style="font-size:12.5px;color:#555;line-height:1.8;">${pdfFeature.description.slice(0,320)}${pdfFeature.description.length>320?'…':''}</div>`:''}
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;">
-        ${p.participants?`<span style="font-size:11px;color:#888;"><span style="color:#D31145;">●</span> ${p.participants} Participants</span>`:''}
-        ${p.volunteerHours?`<span style="font-size:11px;color:#888;"><span style="color:#D31145;">●</span> ${p.volunteerHours}h Volunteered</span>`:''}
+        ${pdfFeature.participants?`<span style="font-size:11px;color:#888;"><span style="color:#D31145;">●</span> ${pdfFeature.participants} Participants</span>`:''}
+        ${pdfFeature.volunteerHours?`<span style="font-size:11px;color:#888;"><span style="color:#D31145;">●</span> ${pdfFeature.volunteerHours}h Volunteered</span>`:''}
       </div>
-    </div>`).join('')
+    </div>` : ''
+
+  const pdfGridCards = pdfGrid.length > 0 ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+      ${pdfGrid.map(p=>`
+      <div style="page-break-inside:avoid;break-inside:avoid;">
+        ${p.newsletterImage?`<div style="height:100px;border-radius:8px;overflow:hidden;margin-bottom:8px;"><img src="${p.newsletterImage}" crossorigin="anonymous" style="width:100%;height:100%;object-fit:cover;" /></div>`:''}
+        <div style="display:inline-block;background:#fff0f3;color:#D31145;font-size:8px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;padding:2px 7px;border-radius:20px;margin-bottom:5px;">${p.avenue||p.category||'Service'}</div>
+        <div style="font-family:'Sora',sans-serif;font-size:13px;font-weight:800;color:#1a1a2e;margin-bottom:4px;">${p.title}</div>
+        ${p.description?`<div style="font-size:10.5px;color:#666;line-height:1.6;">${p.description.slice(0,90)}${p.description.length>90?'…':''}</div>`:''}
+      </div>`).join('')}
+    </div>` : ''
+
+  const projCards = pdfFeatureCard + pdfGridCards
+
+  const galleryBlockPDF = galleryPhotos.length > 0 ? `
+    <div style="display:grid;grid-template-columns:repeat(${Math.min(galleryPhotos.length,3)},1fr);gap:10px;">
+      ${galleryPhotos.slice(0,3).map(g=>`<div style="height:140px;border-radius:8px;overflow:hidden;"><img src="${g.url || g.image}" crossorigin="anonymous" style="width:100%;height:100%;object-fit:cover;" /></div>`).join('')}
+    </div>` : ''
+
+  const spotlightBlockPDF = spotlight?.name && spotlight?.blurb ? `
+    <div style="display:flex;gap:18px;align-items:flex-start;page-break-inside:avoid;break-inside:avoid;">
+      ${avatar(spotlight.name, spotlight.photo, 84, `linear-gradient(135deg,${A},#1a1a2e)`)}
+      <div style="flex:1;">
+        <div style="font-family:'Sora',sans-serif;font-size:17px;font-weight:900;color:#1a1a2e;margin-bottom:2px;">${spotlight.name}</div>
+        ${spotlight.role?`<div style="font-size:11px;color:${A};font-weight:700;margin-bottom:8px;">${spotlight.role}</div>`:''}
+        <div style="padding:14px 18px;background:#fafafa;border-radius:10px;border-left:4px solid ${A};">
+          <div style="font-size:12px;color:#333;line-height:1.8;white-space:pre-line;font-style:italic;">${spotlight.blurb}</div>
+        </div>
+      </div>
+    </div>` : ''
 
   const evCards = events.slice(0,5).map(e=>{
     const dt=new Date(e.date)
@@ -359,11 +478,11 @@ function buildPDFHTML(data) {
   <div style="position:absolute;bottom:0;left:0;right:0;padding:0 48px 52px;">
     <!-- issue badge -->
     <div style="display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,0.2);border-radius:20px;padding:6px 16px;margin-bottom:28px;background:rgba(255,255,255,0.08);">
-      <div style="width:6px;height:6px;border-radius:50%;background:#F7A81B;"></div>
+      <div style="width:6px;height:6px;border-radius:50%;background:${A};"></div>
       <div style="font-size:10px;color:rgba(255,255,255,0.75);letter-spacing:2.5px;text-transform:uppercase;font-weight:600;">Monthly Newsletter</div>
     </div>
     <!-- giant month + year -->
-    <div style="font-family:'Sora',sans-serif;font-size:80px;font-weight:900;color:#fff;line-height:0.88;letter-spacing:-3px;margin-bottom:16px;">${month}<br><span style="color:#F7A81B;">${year}</span></div>
+    <div style="font-family:'Sora',sans-serif;font-size:80px;font-weight:900;color:#fff;line-height:0.88;letter-spacing:-3px;margin-bottom:16px;">${month}<br><span style="color:${A};">${year}</span></div>
     <!-- tagline -->
     <div style="font-size:13px;color:rgba(255,255,255,0.5);letter-spacing:3.5px;text-transform:uppercase;margin-bottom:36px;">${clubTagline||'Create. Lead. Inspire.'}</div>
     <!-- divider -->
@@ -371,7 +490,7 @@ function buildPDFHTML(data) {
     <!-- theme + stats row -->
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;">
       ${rotaryTheme?`<div>
-        <div style="font-size:8px;color:#F7A81B;letter-spacing:2px;text-transform:uppercase;font-weight:700;margin-bottom:5px;">✦ Rotary Monthly Theme</div>
+        <div style="font-size:8px;color:${A};letter-spacing:2px;text-transform:uppercase;font-weight:700;margin-bottom:5px;">✦ Rotary Monthly Theme</div>
         <div style="font-family:'Sora',sans-serif;font-size:16px;font-weight:800;color:#fff;line-height:1.3;max-width:320px;">"${rotaryTheme}"</div>
         ${rotaryThemeNote?`<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:4px;">${rotaryThemeNote}</div>`:''}
       </div>`:'<div></div>'}
@@ -384,7 +503,7 @@ function buildPDFHTML(data) {
       </div>`:''}
     </div>
     <!-- red bottom accent -->
-    <div style="margin-top:28px;height:3px;background:linear-gradient(90deg,#D31145,#F7A81B,transparent);border-radius:2px;"></div>
+    <div style="margin-top:28px;height:3px;background:linear-gradient(90deg,#D31145,${A},transparent);border-radius:2px;"></div>
   </div>
 </div>
 
@@ -402,9 +521,17 @@ function buildPDFHTML(data) {
 
   ${show('rotaryTheme')&&rotaryTheme?`
   <!-- Rotary theme strip -->
-  <div style="background:linear-gradient(135deg,#F7A81B,#f59e0b);padding:14px 48px;">
+  <div style="background:linear-gradient(135deg,${A},#1a1a2e);padding:14px 48px;">
     <div style="font-size:8px;color:rgba(255,255,255,0.75);letter-spacing:2.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">✦ Rotary Monthly Theme — ${month}</div>
     <div style="font-family:'Sora',sans-serif;font-size:16px;font-weight:800;color:#fff;">"${rotaryTheme}"</div>
+  </div>`:''}
+
+  ${show('spotlight')&&spotlightBlockPDF?`
+  <!-- Member spotlight -->
+  <div class="section" style="background:#fdf9f4;">
+    <div style="font-size:8px;color:${A};font-weight:700;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:5px;">Member Spotlight</div>
+    <div style="font-family:'Sora',sans-serif;font-size:18px;font-weight:800;color:#1a1a2e;margin-bottom:16px;">This Month, We Celebrate</div>
+    ${spotlightBlockPDF}
   </div>`:''}
 
   ${show('stats')?`
@@ -439,6 +566,14 @@ function buildPDFHTML(data) {
     <div style="font-size:8px;color:#D31145;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:5px;">Don't Miss</div>
     <div style="font-family:'Sora',sans-serif;font-size:20px;font-weight:800;color:#1a1a2e;margin-bottom:14px;">Upcoming Events</div>
     ${evCards}
+  </div>`:''}
+
+  ${show('gallery')&&galleryBlockPDF?`
+  <!-- Gallery spotlight -->
+  <div class="section">
+    <div style="font-size:8px;color:${A};font-weight:700;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:5px;">Snapshots</div>
+    <div style="font-family:'Sora',sans-serif;font-size:20px;font-weight:800;color:#1a1a2e;margin-bottom:14px;">Gallery Spotlight</div>
+    ${galleryBlockPDF}
   </div>`:''}
 
   ${show('celebrations')&&(birthdays.length>0||anniversaries.length>0)?`
@@ -538,6 +673,7 @@ export default function NewsletterGenerator({ isAdmin, onBack }) {
   const { data: events = [] }      = useCollection('events')
   const { data: leaders = [] }     = useCollection('leaders')
   const { data: meetings = [] }    = useCollection('attendance_meetings')
+  const { data: galleryItems = [] } = useCollection('gallery')
   const { save: saveBlog }         = useCollection('blogs')
 
   const [monthOffset, setMonthOffset] = useState(0)
@@ -582,8 +718,33 @@ export default function NewsletterGenerator({ isAdmin, onBack }) {
   const [sections, setSections] = useState({
     rotaryTheme: true, stats: true, presidentCorner: true,
     projects: true, events: true, celebrations: true,
+    spotlight: true, gallery: true,
   })
   const toggleSection = key => setSections(s => ({ ...s, [key]: !s[key] }))
+
+  // Issue accent — rotates automatically by month so consecutive issues don't look identical
+  const issueAccent = getIssueAccent(monthNum)
+
+  // Member Spotlight — pick a member (auto-fills name/photo/role) then write a blurb
+  const [spotlightMemberId, setSpotlightMemberId] = useState('')
+  const [spotlightRole,     setSpotlightRole]     = useState('')
+  const [spotlightPhoto,    setSpotlightPhoto]    = useState('')
+  const [spotlightBlurb,    setSpotlightBlurb]    = useState('')
+  const spotlightMember = leaders.find(l => l.id === spotlightMemberId)
+  const onSelectSpotlightMember = (id) => {
+    setSpotlightMemberId(id)
+    const m = leaders.find(l => l.id === id)
+    if (m) {
+      setSpotlightRole(m.role || '')
+      setSpotlightPhoto(m.image || m.photo || '')
+    }
+  }
+
+  // Gallery Spotlight — most recent photos, flattened out of the Gallery's albums
+  const galleryPhotos = [...galleryItems]
+    .sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0))
+    .flatMap(album => (album.photos || []).map(p => ({ url: p.url, caption: p.caption || album.title })))
+    .slice(0, 3)
 
   // Auto-pulled data
   const monthProjects  = filterByMonth(allProjects, 'startDate', monthKey)
@@ -632,52 +793,28 @@ export default function NewsletterGenerator({ isAdmin, onBack }) {
     events: upcomingEvents,
     stats, birthdays, anniversaries,
     sections, closingNote,
-  }), [month, year, heroImage, clubTagline, rotaryTheme, rotaryThemeNote, presidentName, presidentTitle, presidentPhoto, presidentMessage, additionalMessages, monthProjects, projectImages, upcomingEvents, stats, birthdays, anniversaries, sections, closingNote])
+    accent: issueAccent,
+    galleryPhotos,
+    spotlight: spotlightMember ? { name: spotlightMember.name, role: spotlightRole, photo: spotlightPhoto, blurb: spotlightBlurb } : null,
+  }), [month, year, heroImage, clubTagline, rotaryTheme, rotaryThemeNote, presidentName, presidentTitle, presidentPhoto, presidentMessage, additionalMessages, monthProjects, projectImages, upcomingEvents, stats, birthdays, anniversaries, sections, closingNote, issueAccent, galleryPhotos, spotlightMember, spotlightRole, spotlightPhoto, spotlightBlurb])
 
   const handleGenerate = () => {
     const html = buildNewsletterHTML(buildData())
     setPreviewHTML(html)
   }
 
-  const loadHtml2pdf = () =>
-    new Promise((resolve, reject) => {
-      if (window.html2pdf) { resolve(); return }
-      const s = document.createElement('script')
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js'
-      s.onload = resolve; s.onerror = reject
-      document.head.appendChild(s)
-    })
-
-  const handleExportPDF = async () => {
+  // Uses the browser's native print-to-PDF instead of a canvas-screenshot library —
+  // html2canvas-based export was silently blanked by privacy browsers (Brave Shields,
+  // Firefox strict mode, etc.) that block Canvas API readback to prevent fingerprinting.
+  const handleExportPDF = () => {
     setExporting(true)
     try {
-      await loadHtml2pdf()
       const data = buildData()
       const pdfHtml = buildPDFHTML(data)
-
-      const wrap = document.createElement('div')
-      wrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;'
-      wrap.innerHTML = pdfHtml
-      document.body.appendChild(wrap)
-
-      await window.html2pdf().set({
-        margin:      0,
-        filename:    `Rotaract-BTM-${data.month}-${data.year}-Newsletter.pdf`,
-        image:       { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale:           2,
-          useCORS:         true,
-          allowTaint:      true,
-          logging:         false,
-          backgroundColor: '#ffffff',
-          width:           794,
-          windowWidth:     794,
-        },
-        jsPDF:     { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
-        pagebreak: { mode: ['css', 'legacy'] },
-      }).from(wrap).save()
-
-      document.body.removeChild(wrap)
+      const w = window.open('', '_blank')
+      w.document.write(pdfHtml)
+      w.document.close()
+      w.onload = () => w.print()
     } catch (e) {
       console.error('PDF export failed:', e)
       alert('PDF export failed. Please try Download HTML instead.')
@@ -766,6 +903,10 @@ export default function NewsletterGenerator({ isAdmin, onBack }) {
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                 </button>
               </div>
+              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-white/10">
+                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: issueAccent.hex }} />
+                <span className="text-xs text-gray-400 dark:text-white/40">This issue's accent: <strong className="text-rotary-charcoal dark:text-white/70">{issueAccent.name}</strong> — rotates automatically each month</span>
+              </div>
             </motion.div>
 
             {/* Section toggles */}
@@ -776,8 +917,10 @@ export default function NewsletterGenerator({ isAdmin, onBack }) {
                   { key: 'rotaryTheme',     label: 'Rotary Theme' },
                   { key: 'stats',           label: 'Stats Strip' },
                   { key: 'presidentCorner', label: "Messages" },
+                  { key: 'spotlight',       label: 'Member Spotlight' },
                   { key: 'projects',        label: 'Project Highlights' },
                   { key: 'events',          label: 'Upcoming Events' },
+                  { key: 'gallery',         label: 'Gallery Spotlight' },
                   { key: 'celebrations',    label: 'Birthdays & Anniversaries' },
                 ].map(({ key, label }) => (
                   <div key={key} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-gray-50 dark:bg-white/[0.04]">
@@ -909,6 +1052,40 @@ export default function NewsletterGenerator({ isAdmin, onBack }) {
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                   Add Another Message (Secretary, Director, etc.)
                 </button>
+              </AccordionSection>
+            </motion.div>
+
+            {/* Member Spotlight */}
+            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }}>
+              <AccordionSection title="Member Spotlight" icon="🌟" badge={spotlightMember ? '✓' : null}>
+                <div>
+                  <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Member</label>
+                  <select className={inputClass} value={spotlightMemberId} onChange={e => onSelectSpotlightMember(e.target.value)}>
+                    <option value="">— Select a member —</option>
+                    {leaders.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                </div>
+                {spotlightMemberId && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Role / Reason</label>
+                        <input className={inputClass} placeholder="e.g. Volunteer of the Month" value={spotlightRole} onChange={e => setSpotlightRole(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Photo URL</label>
+                        <div className="flex gap-2">
+                          <input className={inputClass} placeholder="https://photo-url.jpg" value={spotlightPhoto} onChange={e => setSpotlightPhoto(e.target.value)} />
+                          {spotlightPhoto && <img src={spotlightPhoto} alt="" className="w-10 h-10 rounded-full object-cover border-2 flex-shrink-0" style={{ borderColor: issueAccent.hex }} onError={e => e.target.style.display = 'none'} />}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Why they're being spotlighted</label>
+                      <textarea className={inputClass} rows={4} placeholder="What did they do that deserves recognition this month?" value={spotlightBlurb} onChange={e => setSpotlightBlurb(e.target.value)} />
+                    </div>
+                  </>
+                )}
               </AccordionSection>
             </motion.div>
 

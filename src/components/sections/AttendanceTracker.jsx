@@ -1,11 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as XLSX from 'xlsx'
-import { db } from '../../firebase'
-import {
-  collection, addDoc, doc, updateDoc, deleteDoc,
-  query, orderBy, onSnapshot, serverTimestamp
-} from 'firebase/firestore'
+import { loadFirestore } from '../../firebase'
 
 const pct = (attended, total) =>
   total === 0 ? 0 : Math.round((attended / total) * 100)
@@ -334,45 +330,74 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
 
   // ── Firestore listeners ──
   useEffect(() => {
-    const q = query(collection(db, 'leaders'), orderBy('name'))
-    return onSnapshot(q, snap => setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      const q = mod.query(mod.collection(db, 'leaders'), mod.orderBy('name'))
+      unsub = mod.onSnapshot(q, snap => setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+    })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   useEffect(() => {
-    const q = query(collection(db, 'attendance_meetings'), orderBy('date', 'desc'))
-    return onSnapshot(q, snap => {
-      setMeetings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      setLoading(false)
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      const q = mod.query(mod.collection(db, 'attendance_meetings'), mod.orderBy('date', 'desc'))
+      unsub = mod.onSnapshot(q, snap => {
+        setMeetings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setLoading(false)
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   useEffect(() => {
     // Pull ALL projects regardless of featured flag
-    const q = query(collection(db, 'projects'), orderBy('title'))
-    return onSnapshot(q, snap => setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      const q = mod.query(mod.collection(db, 'projects'), mod.orderBy('title'))
+      unsub = mod.onSnapshot(q, snap => setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+    })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   useEffect(() => {
-    return onSnapshot(collection(db, 'moms'), snap => {
-      const ids = new Set()
-      snap.docs.forEach(d => { const data = d.data(); if (data.linkedMeetingId) ids.add(data.linkedMeetingId) })
-      setLinkedMomIds(ids)
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      unsub = mod.onSnapshot(mod.collection(db, 'moms'), snap => {
+        const ids = new Set()
+        snap.docs.forEach(d => { const data = d.data(); if (data.linkedMeetingId) ids.add(data.linkedMeetingId) })
+        setLinkedMomIds(ids)
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   // ── CRUD ──
   const saveMeeting = async ({ title, date, type, presentIds }) => {
+    const { mod, db } = await loadFirestore()
     if (modalRecord?.id && modalRecord?.sourceType !== 'project') {
-      await updateDoc(doc(db, 'attendance_meetings', modalRecord.id), { title, date, type, presentIds, updatedAt: serverTimestamp() })
+      await mod.updateDoc(mod.doc(db, 'attendance_meetings', modalRecord.id), { title, date, type, presentIds, updatedAt: mod.serverTimestamp() })
     } else {
-      const payload = { title, date, type, presentIds, createdAt: serverTimestamp() }
+      const payload = { title, date, type, presentIds, createdAt: mod.serverTimestamp() }
       if (modalRecord?.projectId) payload.projectId = modalRecord.projectId
-      await addDoc(collection(db, 'attendance_meetings'), payload)
+      await mod.addDoc(mod.collection(db, 'attendance_meetings'), payload)
     }
     setModalRecord(null)
   }
 
-  const deleteMeeting = async (id) => { await deleteDoc(doc(db, 'attendance_meetings', id)); setDeleteId(null) }
+  const deleteMeeting = async (id) => {
+    const { mod, db } = await loadFirestore()
+    await mod.deleteDoc(mod.doc(db, 'attendance_meetings', id))
+    setDeleteId(null)
+  }
 
   const openNewMeeting = () => { setModalRecord(null); setModalOpen(true) }
   const openEditMeeting = (m) => { setModalRecord(m); setModalOpen(true) }
@@ -395,6 +420,7 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
   }
 
   // ── Stats ──
+  const memberIds = new Set(members.map(m => m.id))
   const totalMeetings = meetings.filter(m => !m.projectId).length  // only club meetings for member stats
 
   const memberStats = members.map(m => {
@@ -434,7 +460,7 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
 
   // ── Meeting record row (with MoM button — meetings only) ──
   const RecordRow = ({ record, i }) => {
-    const presentCount = record.presentIds?.length || 0
+    const presentCount = (record.presentIds || []).filter(id => memberIds.has(id)).length
     const percentage = pct(presentCount, members.length)
     const hasMom = linkedMomIds.has(record.id)
 

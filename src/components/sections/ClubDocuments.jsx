@@ -1,10 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { db } from '../../firebase'
-import {
-  collection, addDoc, doc, updateDoc, deleteDoc,
-  query, orderBy, onSnapshot, serverTimestamp
-} from 'firebase/firestore'
+import { loadFirestore } from '../../firebase'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORIES = [
@@ -276,24 +272,32 @@ export default function ClubDocuments({ onBack, isAdmin }) {
 
   // ── Firestore ──
   useEffect(() => {
-    const q = query(collection(db, 'club_documents'), orderBy('createdAt', 'desc'))
-    return onSnapshot(q, snap => {
-      setDocuments(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      setLoading(false)
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      const q = mod.query(mod.collection(db, 'club_documents'), mod.orderBy('createdAt', 'desc'))
+      unsub = mod.onSnapshot(q, snap => {
+        setDocuments(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setLoading(false)
+      })
     })
+    return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
   const handleSave = async (data) => {
+    const { mod, db } = await loadFirestore()
     if (editDoc) {
-      await updateDoc(doc(db, 'club_documents', editDoc.id), { ...data, updatedAt: serverTimestamp() })
+      await mod.updateDoc(mod.doc(db, 'club_documents', editDoc.id), { ...data, updatedAt: mod.serverTimestamp() })
     } else {
-      await addDoc(collection(db, 'club_documents'), { ...data, createdAt: serverTimestamp() })
+      await mod.addDoc(mod.collection(db, 'club_documents'), { ...data, createdAt: mod.serverTimestamp() })
     }
     setEditDoc(null)
   }
 
   const handleDelete = async (id) => {
-    await deleteDoc(doc(db, 'club_documents', id))
+    const { mod, db } = await loadFirestore()
+    await mod.deleteDoc(mod.doc(db, 'club_documents', id))
     setDeleteId(null)
   }
 

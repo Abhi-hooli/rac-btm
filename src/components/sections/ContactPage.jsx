@@ -83,7 +83,7 @@ export default function ContactPage({ onBack }) {
   const iClass = 'w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-rotary-navy-light border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 focus:border-rotary-blue/50 text-sm transition-all'
 
   return (
-    <div className="min-h-screen pt-20">
+    <div className="min-h-screen pt-5">
       <div className="section-padding max-w-7xl mx-auto">
 
         {/* Header */}

@@ -1,34 +1,32 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useCollection, useDocument } from '../../hooks/useFirestore'
+import {
+  PAYMENT_MODES, INCOME_CATEGORIES, EXPENSE_CATEGORIES, inRange,
+  DEFAULT_FORECAST, resolveApprovedBudget,
+} from './treasurerShared'
+import TreasurerReports from './TreasurerReports'
 
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 
-function inRange(dateStr, from, to) {
-  if (!dateStr) return true
-  if (!from && !to) return true
-  const d = new Date(dateStr)
-  if (from && d < new Date(from)) return false
-  if (to && d > new Date(to)) return false
-  return true
-}
-
-function exportDuesCSV(members) {
-  const { data: leaders } = useCollection('leaders')
-  const headers = ['#', 'Member Name', 'Type', 'Annual Due (₹)', 'Paid (₹)', 'Pending (₹)', 'Status', 'Payment Date', 'Payment Mode', 'Note']
+function exportDuesCSV(members, leaders) {
+  const headers =['#', 'Member Name', 'Type', 'Board Role', 'Email', 'Phone', 'Annual Due (₹)', 'Paid (₹)', 'Balance (₹)', 'Status', 'Progress', 'Payment Date', 'Payment Mode', 'Remarks']
   const rows = members.map((m, i) => {
-    const pending = (m.annualDue || 0) - (m.paid || 0)
-    const status = m.paid >= m.annualDue ? 'Paid' : m.paid > 0 ? 'Partial' : 'Unpaid'
+    const balance = (m.annualDue || 0) - (m.paid || 0)
+    const isPaid = m.paid >= m.annualDue && m.annualDue > 0
+    const isPartial = m.paid > 0 && m.paid < m.annualDue
+    const status = isPaid ? 'Paid' : isPartial ? 'Partial' : 'Unpaid'
+    const progress = isPaid ? 'Completed' : isPartial ? 'Partial' : 'Not Started'
     const leader = leaders.find(l => l.name?.toLowerCase() === m.name?.toLowerCase())
     const type = leader?.memberType === 'working' ? 'Working Professional' : 'Student'
-    return [i + 1, `"${m.name}"`, type, m.annualDue || 0, m.paid || 0, pending, status,
+    return [i + 1, `"${m.name}"`, type, `"${leader?.role || ''}"`, `"${m.email || ''}"`, `"${m.phone || ''}"`, m.annualDue || 0, m.paid || 0, balance, status, progress,
     m.paymentDate ? new Date(m.paymentDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
     m.paymentMode || '',
     `"${m.note || ''}"`].join(',')
   })
   const totalDue = members.reduce((s, m) => s + (m.annualDue || 0), 0)
   const totalPaid = members.reduce((s, m) => s + (m.paid || 0), 0)
-  rows.push(['', '"TOTAL"', '', totalDue, totalPaid, totalDue - totalPaid, '', '', '', ''].join(','))
+  rows.push(['', '"TOTAL"', '', '', '', '', totalDue, totalPaid, totalDue - totalPaid, '', '', '', '', ''].join(','))
   const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -40,16 +38,21 @@ function exportDuesCSV(members) {
 }
 
 // ── Summary Cards ──
-function SummaryCards({ members, events, sponsorships = [], dateRange = {} }) {
+function SummaryCards({ members, events, sponsorships = [], transactions = [], dateRange = {} }) {
   const { from, to } = dateRange
   const filteredMembers = members.filter(m => inRange(m.paymentDate, from, to) || (!m.paymentDate && !from && !to))
   const filteredEvents = events.filter(e => inRange(e.date, from, to))
   const filteredSponsorships = sponsorships.filter(s => inRange(s.date, from, to))
+  const filteredTransactions = transactions.filter(t => inRange(t.date, from, to))
   const totalDues = members.reduce((sum, m) => sum + (m.annualDue || 0), 0)
+  const totalTransactionIncome = filteredTransactions.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
+  const totalTransactionExpense = filteredTransactions.filter(t => t.type === 'Expense').reduce((s, t) => s + (t.amount || 0), 0)
   const totalCollected = filteredMembers.reduce((sum, m) => sum + (m.paid || 0), 0)
     + filteredSponsorships.reduce((sum, s) => sum + (s.amount || 0), 0)
+    + totalTransactionIncome
   const totalPending = totalDues - totalCollected
   const totalExpenses = filteredEvents.reduce((sum, e) => sum + (e.expenses || []).reduce((s, x) => s + (x.amount || 0), 0), 0)
+    + totalTransactionExpense
   const balance = totalCollected - totalExpenses
   const cards = [
     { label: 'Total Dues', value: totalDues, color: 'text-rotary-slate dark:text-white/60' },
@@ -71,20 +74,22 @@ function SummaryCards({ members, events, sponsorships = [], dateRange = {} }) {
 }
 
 // ── Members Dues Tab ──
-const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque']
-
-function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
-  const { data: leaders } = useCollection('leaders')
+function MembersDues({ members, leaders, saveMember, removeMember, dateRange = {} }) {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all') // 'all' | 'paid' | 'partial' | 'unpaid'
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [modeFilter, setModeFilter] = useState('all')
+  const [progressFilter, setProgressFilter] = useState('all')
+  const [openMenuId, setOpenMenuId] = useState(null)
   const [deleteId, setDeleteId] = useState(null)
   const [editingMember, setEditingMember] = useState(null)
-  const [editForm, setEditForm] = useState({ paid: 0, paymentDate: '', paymentMode: '', note: '' })
+  const [editForm, setEditForm] = useState({ paid: 0, paymentDate: '', paymentMode: '', note: '', email: '', phone: '' })
 
   const handleRemove = (id) => setDeleteId(id)
   const openEdit = (m) => {
     setEditingMember(m)
-    setEditForm({ paid: m.paid || 0, paymentDate: m.paymentDate || '', paymentMode: m.paymentMode || '', note: m.note || '' })
+    setEditForm({ paid: m.paid || 0, paymentDate: m.paymentDate || '', paymentMode: m.paymentMode || '', note: m.note || '', email: m.email || '', phone: m.phone || '' })
   }
   const markPaid = async (id) => {
     const m = members.find(x => x.id === id)
@@ -149,6 +154,16 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
     URL.revokeObjectURL(url)
   }
 
+  const leaderFor = (m) => leaders.find(l => l.name?.toLowerCase() === m.name?.toLowerCase())
+  const memberTypeLabel = (m) => leaderFor(m)?.memberType === 'working' ? 'Working Professional' : 'Student'
+  const progressOf = (m) => {
+    const isPaid = m.paid >= m.annualDue && m.annualDue > 0
+    const isPartial = m.paid > 0 && m.paid < m.annualDue
+    return isPaid ? 'Completed' : isPartial ? 'Partial' : 'Not Started'
+  }
+
+  const boardRoleOptions = [...new Set(leaders.map(l => l.role).filter(Boolean))].sort()
+
   const { from, to } = dateRange
   const rangeFiltered = (from || to) ? members.filter(m => m.paymentDate ? inRange(m.paymentDate, from, to) : false) : members
 
@@ -162,9 +177,20 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
     return true
   })
 
+  const columnFiltered = statusFiltered.filter(m => {
+    if (typeFilter !== 'all' && memberTypeLabel(m) !== typeFilter) return false
+    if (roleFilter !== 'all' && (leaderFor(m)?.role || '') !== roleFilter) return false
+    if (modeFilter !== 'all' && (m.paymentMode || '') !== modeFilter) return false
+    if (progressFilter !== 'all' && progressOf(m) !== progressFilter) return false
+    return true
+  })
+
   const filtered = search
-    ? statusFiltered.filter(m => m.name.toLowerCase().includes(search.toLowerCase()))
-    : statusFiltered
+    ? columnFiltered.filter(m => m.name.toLowerCase().includes(search.toLowerCase()))
+    : columnFiltered
+
+  const activeColumnFilters = [typeFilter, roleFilter, modeFilter, progressFilter].filter(f => f !== 'all').length
+  const resetColumnFilters = () => { setTypeFilter('all'); setRoleFilter('all'); setModeFilter('all'); setProgressFilter('all') }
 
   const totalDue = members.reduce((s, m) => s + (m.annualDue || 0), 0)
   const totalPaid = members.reduce((s, m) => s + (m.paid || 0), 0)
@@ -184,7 +210,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-rotary-slate dark:text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
           <input className={`${inputClass} !pl-10`} placeholder="Search members..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <button onClick={() => exportDuesCSV(filtered)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm font-medium text-rotary-charcoal dark:text-white/60 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors shrink-0">
+        <button onClick={() => exportDuesCSV(filtered, leaders)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm font-medium text-rotary-charcoal dark:text-white/60 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors shrink-0">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
           Export
         </button>
@@ -211,42 +237,95 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
         ))}
       </div>
 
+      {/* ── Column filters ── */}
+      <div className="flex flex-wrap items-end gap-3 mb-6 bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 p-4">
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Type</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+            <option value="all">All Types</option>
+            <option value="Working Professional">Working Professional</option>
+            <option value="Student">Student</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Board Role</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
+            <option value="all">All Roles</option>
+            {boardRoleOptions.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Progress</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={progressFilter} onChange={e => setProgressFilter(e.target.value)}>
+            <option value="all">All Progress</option>
+            <option value="Not Started">Not Started</option>
+            <option value="Partial">Partial</option>
+            <option value="Completed">Completed</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Payment Mode</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={modeFilter} onChange={e => setModeFilter(e.target.value)}>
+            <option value="all">All Modes</option>
+            {PAYMENT_MODES.map(mode => <option key={mode} value={mode}>{mode}</option>)}
+          </select>
+        </div>
+        {activeColumnFilters > 0 && (
+          <button onClick={resetColumnFilters} className="text-xs font-medium text-rotary-blue hover:underline mb-2.5">
+            Clear filters ({activeColumnFilters})
+          </button>
+        )}
+      </div>
+
       <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 dark:border-white/5">
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Member</th>
+                <th className="sticky left-0 z-20 w-12 bg-gray-50 dark:bg-rotary-navy-light text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">#</th>
+                <th className="sticky left-12 z-20 bg-gray-50 dark:bg-rotary-navy-light shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Member</th>
                 <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Type</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Board Role</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Email</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Phone</th>
                 <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Due</th>
                 <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Paid</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Balance</th>
                 <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Status</th>
+                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Progress</th>
                 <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Payment Date</th>
                 <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Mode</th>
-                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Receipt</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Note</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Remarks</th>
                 <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(m => {
+              {filtered.map((m, idx) => {
                 const isPaid = m.paid >= m.annualDue && m.annualDue > 0
                 const isPartial = m.paid > 0 && m.paid < m.annualDue
                 const leader = leaders.find(l => l.name?.toLowerCase() === m.name?.toLowerCase())
                 const memberType = leader?.memberType === 'working' ? 'Working Professional' : 'Student'
+                const balance = (m.annualDue || 0) - (m.paid || 0)
+                const progress = isPaid ? 'Completed' : isPartial ? 'Partial' : 'Not Started'
                 return (
-                  <tr key={m.id} className="border-b border-gray-50 dark:border-white/[0.03] hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
-                    <td className="px-5 py-3 font-medium">{m.name}</td>
+                  <tr key={m.id} className="group border-b border-gray-50 dark:border-white/[0.03] hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
+                    <td className="sticky left-0 z-10 bg-white dark:bg-rotary-navy-light group-hover:bg-gray-50 dark:group-hover:bg-white/[0.02] px-5 py-3 text-xs text-rotary-slate dark:text-white/40">{idx + 1}</td>
+                    <td className="sticky left-12 z-10 bg-white dark:bg-rotary-navy-light group-hover:bg-gray-50 dark:group-hover:bg-white/[0.02] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] px-5 py-3 font-medium">{m.name}</td>
                     <td className="px-5 py-3">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${memberType === 'Working Professional' ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400'}`}>{memberType}</span>
                     </td>
+                    <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{leader?.role || '—'}</td>
+                    <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{m.email || '—'}</td>
+                    <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{m.phone || '—'}</td>
                     <td className="px-5 py-3 text-right">₹{(m.annualDue || 0).toLocaleString()}</td>
                     <td className="px-5 py-3 text-right">₹{(m.paid || 0).toLocaleString()}</td>
+                    <td className="px-5 py-3 text-right font-medium">₹{balance.toLocaleString()}</td>
                     <td className="px-5 py-3 text-center">
                       <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${isPaid ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400' : isPartial ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'}`}>
                         {isPaid ? 'Paid' : isPartial ? 'Partial' : 'Unpaid'}
                       </span>
                     </td>
+                    <td className="px-5 py-3 text-center text-xs text-rotary-slate dark:text-white/50">{progress}</td>
                     <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">
                       {m.paymentDate ? new Date(m.paymentDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                     </td>
@@ -255,43 +334,44 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                         ? <span className="inline-block px-2 py-0.5 rounded-md bg-gray-100 dark:bg-white/5 font-medium">{m.paymentMode}</span>
                         : <span className="text-rotary-slate dark:text-white/20">—</span>}
                     </td>
-                    <td className="px-5 py-3 text-center">
-                      {m.paid > 0 ? (
-                        <button onClick={() => generateReceipt(m)} title="Download Receipt" className="w-7 h-7 rounded-lg bg-rotary-blue/10 text-rotary-blue flex items-center justify-center hover:bg-rotary-blue/20 transition-colors mx-auto">
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                        </button>
-                      ) : <span className="text-rotary-slate dark:text-white/20 text-xs">—</span>}
-                    </td>
                     <td className="px-5 py-3 text-rotary-slate dark:text-white/40 text-xs">{m.note || '—'}</td>
-                    <td className="px-5 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button onClick={() => openEdit(m)} title="Edit payment" className="w-7 h-7 rounded-lg bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-white/10 transition-colors">
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
-                        {!isPaid && (
-                          <button onClick={() => markPaid(m.id)} title="Mark as Paid" className="w-7 h-7 rounded-lg bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 flex items-center justify-center hover:bg-green-100 dark:hover:bg-green-500/20 transition-colors">
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                          </button>
-                        )}
-                        <button onClick={() => handleRemove(m.id)} className="w-7 h-7 rounded-lg bg-red-50 dark:bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors">
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        </button>
-                      </div>
+                    <td className="px-5 py-3 text-right relative">
+                      <button
+                        onClick={() => setOpenMenuId(openMenuId === m.id ? null : m.id)}
+                        title="Actions"
+                        className="w-7 h-7 rounded-lg bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-white/10 transition-colors ml-auto"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01" /></svg>
+                      </button>
+                      {openMenuId === m.id && (
+                        <>
+                          <div className="fixed inset-0 z-20" onClick={() => setOpenMenuId(null)} />
+                          <div className="absolute right-5 top-full mt-1 z-30 w-44 bg-white dark:bg-rotary-navy-light border border-gray-100 dark:border-white/10 rounded-xl shadow-lg overflow-hidden text-left">
+                            <button onClick={() => { openEdit(m); setOpenMenuId(null) }} className="w-full px-4 py-2.5 text-xs font-medium text-rotary-charcoal dark:text-white/70 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">Edit Payment</button>
+                            {!isPaid && (
+                              <button onClick={() => { markPaid(m.id); setOpenMenuId(null) }} className="w-full px-4 py-2.5 text-xs font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-500/10 transition-colors">Mark as Paid</button>
+                            )}
+                            {m.paid > 0 && (
+                              <button onClick={() => { generateReceipt(m); setOpenMenuId(null) }} className="w-full px-4 py-2.5 text-xs font-medium text-rotary-blue hover:bg-rotary-blue/5 transition-colors">Download Receipt</button>
+                            )}
+                            <button onClick={() => { handleRemove(m.id); setOpenMenuId(null) }} className="w-full px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors">Remove</button>
+                          </div>
+                        </>
+                      )}
                     </td>
                   </tr>
                 )
               })}
               {filtered.length === 0 && (
-                <tr><td colSpan={10} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No members found.</td></tr>
+                <tr><td colSpan={15} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No members found.</td></tr>
               )}
             </tbody>
             <tfoot>
               <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
-                <td className="px-5 py-3 font-semibold" colSpan={2}>Total ({members.length})</td>
+                <td className="px-5 py-3 font-semibold" colSpan={6}>Total ({members.length})</td>
                 <td className="px-5 py-3 text-right font-semibold">₹{totalDue.toLocaleString()}</td>
                 <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalPaid.toLocaleString()}</td>
+                <td className="px-5 py-3 text-right font-semibold text-amber-600 dark:text-amber-400">₹{(totalDue - totalPaid).toLocaleString()}</td>
                 <td colSpan={6} className="px-5 py-3 text-right text-sm text-rotary-slate dark:text-white/40">
                   Pending: <span className="font-semibold text-amber-600 dark:text-amber-400">₹{(totalDue - totalPaid).toLocaleString()}</span>
                 </td>
@@ -304,7 +384,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
       <AnimatePresence>
         {deleteId && (
           <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setDeleteId(null)} />
+            <div className="absolute inset-0 bg-black/60" onClick={() => setDeleteId(null)} />
             <motion.div className="relative bg-white dark:bg-rotary-navy-light rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100 dark:border-white/10" initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}>
               <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-500/10 flex items-center justify-center mb-4">
                 <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -324,7 +404,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
           >
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setEditingMember(null)} />
+            <div className="absolute inset-0 bg-black/60" onClick={() => setEditingMember(null)} />
             <motion.div
               className="relative bg-white dark:bg-rotary-navy-light rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100 dark:border-white/10"
               initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
@@ -353,6 +433,29 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                   {editForm.paid >= editingMember.annualDue && editingMember.annualDue > 0 && (
                     <p className="text-xs text-green-600 mt-1">✓ Fully paid</p>
                   )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Email</label>
+                    <input
+                      className={inputClass}
+                      type="email"
+                      placeholder="member@email.com"
+                      value={editForm.email}
+                      onChange={e => setEditForm({ ...editForm, email: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Phone</label>
+                    <input
+                      className={inputClass}
+                      type="tel"
+                      placeholder="+91…"
+                      value={editForm.phone}
+                      onChange={e => setEditForm({ ...editForm, phone: e.target.value })}
+                    />
+                  </div>
                 </div>
 
                 <div>
@@ -387,7 +490,7 @@ function MembersDues({ members, saveMember, removeMember, dateRange = {} }) {
                 </div>
 
                 <div>
-                  <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Note</label>
+                  <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Remarks</label>
                   <input
                     className={inputClass}
                     placeholder="e.g. reference no., collected by, etc."
@@ -794,7 +897,7 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
       <AnimatePresence>
         {deleteId && (
           <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setDeleteId(null)} />
+            <div className="absolute inset-0 bg-black/60" onClick={() => setDeleteId(null)} />
             <motion.div className="relative bg-white dark:bg-rotary-navy-light rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100 dark:border-white/10" initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}>
               <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-500/10 flex items-center justify-center mb-4">
                 <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -993,7 +1096,7 @@ function Sponsorships({ sponsorships, saveSponsorship, removeSponsorship, dateRa
       <AnimatePresence>
         {deleteId && (
           <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setDeleteId(null)} />
+            <div className="absolute inset-0 bg-black/60" onClick={() => setDeleteId(null)} />
             <motion.div className="relative bg-white dark:bg-rotary-navy-light rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100 dark:border-white/10" initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}>
               <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-500/10 flex items-center justify-center mb-4">
                 <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1015,16 +1118,19 @@ function Sponsorships({ sponsorships, saveSponsorship, removeSponsorship, dateRa
 }
 
 // ── Balance Sheet ──
-function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} }) {
+function BalanceSheet({ members, eventLedger, sponsorships = [], transactions = [], dateRange = {} }) {
   const { from, to } = dateRange
   const filteredMembers = (from || to) ? members.filter(m => m.paymentDate ? inRange(m.paymentDate, from, to) : false) : members
   const filteredEvents = (from || to) ? eventLedger.filter(e => inRange(e.date, from, to)) : eventLedger
   const filteredSponsorships = (from || to) ? sponsorships.filter(s => inRange(s.date, from, to)) : sponsorships
+  const filteredTransactions = (from || to) ? transactions.filter(t => inRange(t.date, from, to)) : transactions
 
   const totalDues = members.reduce((s, m) => s + (m.annualDue || 0), 0)
   const totalCollected = filteredMembers.reduce((s, m) => s + (m.paid || 0), 0)
   const totalPending = totalDues - totalCollected
   const totalSponsorships = filteredSponsorships.reduce((s, x) => s + (x.amount || 0), 0)
+  const totalTransactionIncome = filteredTransactions.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
+  const totalTransactionExpense = filteredTransactions.filter(t => t.type === 'Expense').reduce((s, t) => s + (t.amount || 0), 0)
 
   const eventTotals = filteredEvents.map(ev => ({
     name: ev.eventName,
@@ -1036,8 +1142,9 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
   }))
 
   const totalEventIncome = eventTotals.reduce((s, e) => s + e.income, 0)
-  const totalExpenses = eventTotals.reduce((s, e) => s + e.spent, 0)
-  const totalIncome = totalCollected + totalSponsorships + totalEventIncome
+  const totalEventExpenses = eventTotals.reduce((s, e) => s + e.spent, 0)
+  const totalExpenses = totalEventExpenses + totalTransactionExpense
+  const totalIncome = totalCollected + totalSponsorships + totalEventIncome + totalTransactionIncome
   const balance = totalIncome - totalExpenses
   const isPositive = balance >= 0
 
@@ -1047,6 +1154,7 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
     rows.push(['"Membership Dues Collected"', '', totalCollected].join(','))
     if (totalSponsorships > 0) rows.push(['"Total Sponsorships"', '', totalSponsorships].join(','))
     if (totalEventIncome > 0) rows.push(['"Project Income (ticket sales etc.)"', '', totalEventIncome].join(','))
+    if (totalTransactionIncome > 0) rows.push(['"Other Income (Transactions)"', '', totalTransactionIncome].join(','))
     rows.push(['"Total Income"', '', totalIncome].join(','))
     rows.push(['', '', ''].join(','))
     rows.push(['"EXPENSES"', '', ''].join(','))
@@ -1054,6 +1162,7 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
       rows.push([`"${ev.name}"`, `"${ev.date ? new Date(ev.date).toLocaleDateString('en-IN') : ''}"`, ev.spent].join(','))
       ev.breakdown.forEach(([cat, amt]) => rows.push([`"  — ${cat}"`, '', amt].join(',')))
     })
+    if (totalTransactionExpense > 0) rows.push(['"Other Expenses (Transactions)"', '', totalTransactionExpense].join(','))
     rows.push(['"Total Expenses"', '', totalExpenses].join(','))
     rows.push(['', '', ''].join(','))
     rows.push([`"${isPositive ? 'NET SURPLUS' : 'NET DEFICIT'}"`, '', balance].join(','))
@@ -1115,6 +1224,12 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
                   <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalEventIncome.toLocaleString()}</td>
                 </tr>
               )}
+              {totalTransactionIncome > 0 && (
+                <tr className="border-b border-gray-50 dark:border-white/[0.03]">
+                  <td className="px-5 py-3"><p className="font-medium">Other Income</p><p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">From Transactions ledger</p></td>
+                  <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalTransactionIncome.toLocaleString()}</td>
+                </tr>
+              )}
             </tbody>
             <tfoot>
               <tr className="border-t border-gray-100 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
@@ -1138,7 +1253,7 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
           </div>
           <table className="w-full text-sm">
             <tbody>
-              {eventTotals.length === 0 && <tr><td colSpan={3} className="px-5 py-8 text-center text-rotary-slate dark:text-white/30 text-xs">No expenses recorded.</td></tr>}
+              {eventTotals.length === 0 && totalTransactionExpense === 0 && <tr><td colSpan={3} className="px-5 py-8 text-center text-rotary-slate dark:text-white/30 text-xs">No expenses recorded.</td></tr>}
               {eventTotals.map((ev, i) => (
                 <tr key={i} className="border-b border-gray-50 dark:border-white/[0.03]">
                   <td className="px-5 py-3">
@@ -1150,6 +1265,13 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
                   <td className="px-5 py-3 text-right font-semibold text-red-500">₹{ev.spent.toLocaleString()}</td>
                 </tr>
               ))}
+              {totalTransactionExpense > 0 && (
+                <tr className="border-b border-gray-50 dark:border-white/[0.03]">
+                  <td className="px-5 py-3"><p className="font-medium">Other Expenses</p><p className="text-xs text-rotary-slate dark:text-white/30 mt-0.5">From Transactions ledger</p></td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">—</td>
+                  <td className="px-5 py-3 text-right font-semibold text-red-500">₹{totalTransactionExpense.toLocaleString()}</td>
+                </tr>
+              )}
             </tbody>
             <tfoot>
               <tr className="border-t border-gray-100 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
@@ -1160,6 +1282,991 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], dateRange = {} 
           </table>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Budget vs Actual ──
+function BudgetVsActual({ approvedBudget, saveApprovedBudget, transactions, forecast }) {
+  const { budget, isFrozen, live: liveFromForecast } = resolveApprovedBudget(approvedBudget, forecast)
+
+  const actualByCategory = EXPENSE_CATEGORIES.reduce((acc, cat) => {
+    acc[cat] = transactions.filter(t => t.type === 'Expense' && t.budgetHead === cat).reduce((s, t) => s + (t.amount || 0), 0)
+    return acc
+  }, {})
+
+  const handleFreeze = () => saveApprovedBudget({ ...liveFromForecast, frozen: true, frozenAt: new Date().toISOString() })
+  const handleUnfreeze = () => saveApprovedBudget({ ...budget, frozen: false, frozenAt: null })
+
+  const totalApproved = EXPENSE_CATEGORIES.reduce((s, c) => s + (budget[c] || 0), 0)
+  const totalActual = EXPENSE_CATEGORIES.reduce((s, c) => s + (actualByCategory[c] || 0), 0)
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="font-display font-bold text-lg">Budget vs Actual</h2>
+        <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">Approved budget pulled from the Forecast tab vs. actual spend recorded in Transactions</p>
+      </div>
+
+      {isFrozen ? (
+        <div className="rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-100 dark:border-green-500/20 px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <p className="text-sm text-green-700 dark:text-green-400">
+            <span className="font-semibold">Budget frozen</span> on {new Date(approvedBudget.frozenAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })} — these numbers are locked and won't change even if the Forecast tab is edited later.
+          </p>
+          <button onClick={handleUnfreeze} className="text-xs font-semibold text-green-700 dark:text-green-400 hover:underline shrink-0">Unfreeze</button>
+        </div>
+      ) : (
+        <div className="rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-100 dark:border-amber-500/20 px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <p className="text-sm text-amber-700 dark:text-amber-400">
+            Showing <span className="font-semibold">live values from Forecast</span> — these will keep updating if you change the Forecast tab. Once the budget is confirmed, freeze it to lock these numbers permanently.
+          </p>
+          <button onClick={handleFreeze} className="px-4 py-2 rounded-lg bg-rotary-gold text-rotary-navy text-xs font-semibold hover:bg-rotary-gold-light transition-colors shrink-0">Freeze Budget</button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Approved</p>
+          <p className="text-xl font-display font-bold text-rotary-charcoal dark:text-white">₹{totalApproved.toLocaleString()}</p>
+        </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Actual Spent</p>
+          <p className="text-xl font-display font-bold text-red-500">₹{totalActual.toLocaleString()}</p>
+        </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Balance</p>
+          <p className={`text-xl font-display font-bold ${totalApproved - totalActual >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>₹{(totalApproved - totalActual).toLocaleString()}</p>
+        </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Utilization</p>
+          <p className="text-xl font-display font-bold text-rotary-blue">{totalApproved > 0 ? Math.round((totalActual / totalApproved) * 100) : 0}%</p>
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-white/5">
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Budget Head</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Approved Budget</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Actual Spent</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Balance</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold w-48">Utilization %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {EXPENSE_CATEGORIES.map(cat => {
+                const approved = budget[cat] || 0
+                const actual = actualByCategory[cat] || 0
+                const bal = approved - actual
+                const pct = approved > 0 ? Math.round((actual / approved) * 100) : 0
+                const overBudget = approved > 0 && actual > approved
+                return (
+                  <tr key={cat} className="border-b border-gray-50 dark:border-white/[0.03] last:border-0">
+                    <td className="px-5 py-3 font-medium">{cat}</td>
+                    <td className="px-5 py-3 text-right">₹{approved.toLocaleString()}</td>
+                    <td className={`px-5 py-3 text-right ${overBudget ? 'text-red-500 font-semibold' : ''}`}>₹{actual.toLocaleString()}</td>
+                    <td className={`px-5 py-3 text-right font-medium ${bal >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>{bal >= 0 ? '' : '-'}₹{Math.abs(bal).toLocaleString()}</td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1.5 rounded-full bg-gray-200 dark:bg-white/10 overflow-hidden">
+                          <div className={`h-full rounded-full ${overBudget ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                        </div>
+                        <span className={`text-xs w-10 text-right ${overBudget ? 'text-red-500 font-semibold' : 'text-rotary-slate dark:text-white/40'}`}>{pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
+                <td className="px-5 py-3 font-semibold">Total</td>
+                <td className="px-5 py-3 text-right font-semibold">₹{totalApproved.toLocaleString()}</td>
+                <td className="px-5 py-3 text-right font-semibold text-red-500">₹{totalActual.toLocaleString()}</td>
+                <td className={`px-5 py-3 text-right font-bold ${totalApproved - totalActual >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>₹{(totalApproved - totalActual).toLocaleString()}</td>
+                <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">{totalApproved > 0 ? Math.round((totalActual / totalApproved) * 100) : 0}%</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Annual Forecast ──
+function mergeForecast(forecast) {
+  return { ...DEFAULT_FORECAST, ...forecast, membership: { ...DEFAULT_FORECAST.membership, ...(forecast?.membership || {}) } }
+}
+
+function Forecast({ forecast, saveForecast }) {
+  // Local-first editing: typing updates local state immediately (fast), and the
+  // Firestore write is debounced so we don't do a round-trip + re-render per keystroke.
+  const [data, setData] = useState(() => mergeForecast(forecast))
+  const dirtyRef = useRef(false)
+  const saveTimerRef = useRef(null)
+
+  useEffect(() => {
+    if (!dirtyRef.current) setData(mergeForecast(forecast))
+  }, [forecast])
+
+  useEffect(() => () => clearTimeout(saveTimerRef.current), [])
+
+  const commit = (next) => {
+    setData(next)
+    dirtyRef.current = true
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      saveForecast(next)
+      dirtyRef.current = false
+    }, 600)
+  }
+
+  const categories = data.budgetCategories?.length ? data.budgetCategories : DEFAULT_FORECAST.budgetCategories
+  const additionalRevenue = data.additionalRevenue?.length ? data.additionalRevenue : DEFAULT_FORECAST.additionalRevenue
+
+  const updateMembership = (type, field, value) => {
+    commit({
+      ...data,
+      membership: { ...data.membership, [type]: { ...data.membership[type], [field]: parseInt(value) || 0 } }
+    })
+  }
+
+  const updateCategoryItem = (catKey, itemIndex, value) => {
+    commit({
+      ...data,
+      budgetCategories: categories.map(c => c.key !== catKey ? c : {
+        ...c, items: c.items.map((it, i) => i !== itemIndex ? it : { ...it, amount: parseInt(value) || 0 })
+      })
+    })
+  }
+
+  const updateRevenueItem = (itemIndex, value) => {
+    commit({
+      ...data,
+      additionalRevenue: additionalRevenue.map((it, i) => i !== itemIndex ? it : { ...it, amount: parseInt(value) || 0 })
+    })
+  }
+
+  const resetToDefault = () => {
+    clearTimeout(saveTimerRef.current)
+    dirtyRef.current = false
+    setData(DEFAULT_FORECAST)
+    saveForecast(DEFAULT_FORECAST)
+  }
+
+  const { professional, student } = data.membership
+  const currentMembershipRevenue = (professional.current * professional.dues) + (student.current * student.dues)
+  const proposedMembershipRevenue = (professional.proposed * professional.dues) + (student.proposed * student.dues)
+  const totalAdditionalRevenue = additionalRevenue.reduce((s, r) => s + (r.amount || 0), 0)
+
+  const categoryTotals = categories.map(c => ({ ...c, total: c.items.reduce((s, it) => s + (it.amount || 0), 0) }))
+  const totalProposedBudget = categoryTotals.reduce((s, c) => s + c.total, 0)
+
+  const scenarios = [
+    { label: `Current (${professional.current + student.current} members)`, revenue: currentMembershipRevenue, extra: 0 },
+    { label: `Current + Sponsorships`, revenue: currentMembershipRevenue, extra: totalAdditionalRevenue },
+    { label: `Proposed (${professional.proposed + student.proposed} members) + Sponsorships`, revenue: proposedMembershipRevenue, extra: totalAdditionalRevenue },
+  ]
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-display font-bold text-lg">Annual Forecast</h2>
+          <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">Membership, budget & revenue planning for the Rotary year</p>
+        </div>
+        <button
+          onClick={resetToDefault}
+          className="text-xs font-medium text-rotary-blue hover:underline shrink-0"
+        >
+          Reset to Budget 26-27
+        </button>
+      </div>
+
+      {/* Membership */}
+      <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 dark:border-white/5">
+          <h3 className="font-display font-semibold">Membership</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-white/5">
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Category</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Current Strength</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Proposed</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Annual Dues (₹)</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Current Revenue</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Projected Revenue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[{ key: 'professional', label: 'Professional Members' }, { key: 'student', label: 'Student Members' }].map(({ key, label }) => {
+                const m = data.membership[key]
+                return (
+                  <tr key={key} className="border-b border-gray-50 dark:border-white/[0.03]">
+                    <td className="px-5 py-3 font-medium">{label}</td>
+                    <td className="px-5 py-3 text-right"><input type="number" min="0" className={`${inputClass} !w-20 !px-2 ml-auto text-right`} value={m.current || ''} onChange={e => updateMembership(key, 'current', e.target.value)} /></td>
+                    <td className="px-5 py-3 text-right"><input type="number" min="0" className={`${inputClass} !w-20 !px-2 ml-auto text-right`} value={m.proposed || ''} onChange={e => updateMembership(key, 'proposed', e.target.value)} /></td>
+                    <td className="px-5 py-3 text-right"><input type="number" min="0" className={`${inputClass} !w-28 !px-2 ml-auto text-right`} value={m.dues || ''} onChange={e => updateMembership(key, 'dues', e.target.value)} /></td>
+                    <td className="px-5 py-3 text-right font-semibold">₹{(m.current * m.dues).toLocaleString()}</td>
+                    <td className="px-5 py-3 text-right font-semibold text-rotary-blue">₹{(m.proposed * m.dues).toLocaleString()}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
+                <td className="px-5 py-3 font-semibold" colSpan={4}>Total Membership Revenue</td>
+                <td className="px-5 py-3 text-right font-bold">₹{currentMembershipRevenue.toLocaleString()}</td>
+                <td className="px-5 py-3 text-right font-bold text-rotary-blue">₹{proposedMembershipRevenue.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      {/* Budget Categories */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {categoryTotals.map(cat => (
+          <div key={cat.key} className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 dark:border-white/5 flex items-center justify-between">
+              <h3 className="font-display font-semibold text-sm">{cat.label}</h3>
+              <span className="text-sm font-bold text-rotary-blue">₹{cat.total.toLocaleString()}</span>
+            </div>
+            <table className="w-full text-sm">
+              <tbody>
+                {cat.items.map((item, i) => (
+                  <tr key={item.label} className="border-b border-gray-50 dark:border-white/[0.03] last:border-0">
+                    <td className="px-5 py-2.5">{item.label}</td>
+                    <td className="pl-2 pr-4 py-2.5 text-right w-36">
+                      <input type="number" min="0" className={`${inputClass} !py-1.5 !px-2 text-right`} value={item.amount || ''} placeholder="0" onChange={e => updateCategoryItem(cat.key, i, e.target.value)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-xl bg-gray-50 dark:bg-white/[0.02] border border-gray-100 dark:border-white/5 px-5 py-4 flex items-center justify-between">
+        <span className="font-display font-semibold">Total Proposed Budget</span>
+        <span className="font-display font-bold text-lg">₹{totalProposedBudget.toLocaleString()}</span>
+      </div>
+
+      {/* Additional Revenue */}
+      <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 dark:border-white/5 flex items-center justify-between">
+          <h3 className="font-display font-semibold">Additional Revenue Sources</h3>
+          <span className="text-sm font-bold text-green-600 dark:text-green-400">₹{totalAdditionalRevenue.toLocaleString()}</span>
+        </div>
+        <table className="w-full text-sm">
+          <tbody>
+            {additionalRevenue.map((item, i) => (
+              <tr key={item.label} className="border-b border-gray-50 dark:border-white/[0.03] last:border-0">
+                <td className="px-5 py-2.5">{item.label}</td>
+                <td className="pl-2 pr-4 py-2.5 text-right w-36">
+                  <input type="number" min="0" className={`${inputClass} !py-1.5 !px-2 text-right`} value={item.amount || ''} placeholder="0" onChange={e => updateRevenueItem(i, e.target.value)} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Scenario comparison */}
+      <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 dark:border-white/5">
+          <h3 className="font-display font-semibold">Scenario Comparison</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-white/5">
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Source</th>
+                {scenarios.map(s => (
+                  <th key={s.label} className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">{s.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-gray-50 dark:border-white/[0.03]">
+                <td className="px-5 py-3">Membership Revenue</td>
+                {scenarios.map(s => <td key={s.label} className="px-5 py-3 text-right">₹{s.revenue.toLocaleString()}</td>)}
+              </tr>
+              <tr className="border-b border-gray-50 dark:border-white/[0.03]">
+                <td className="px-5 py-3">Additional Revenue</td>
+                {scenarios.map(s => <td key={s.label} className="px-5 py-3 text-right">₹{s.extra.toLocaleString()}</td>)}
+              </tr>
+              <tr className="border-b border-gray-50 dark:border-white/[0.03]">
+                <td className="px-5 py-3 font-semibold">Total Projected Revenue</td>
+                {scenarios.map(s => <td key={s.label} className="px-5 py-3 text-right font-semibold">₹{(s.revenue + s.extra).toLocaleString()}</td>)}
+              </tr>
+              <tr className="border-b border-gray-50 dark:border-white/[0.03]">
+                <td className="px-5 py-3">Total Proposed Budget</td>
+                {scenarios.map(s => <td key={s.label} className="px-5 py-3 text-right">₹{totalProposedBudget.toLocaleString()}</td>)}
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
+                <td className="px-5 py-3 font-bold">Deficit / Surplus</td>
+                {scenarios.map(s => {
+                  const delta = (s.revenue + s.extra) - totalProposedBudget
+                  return <td key={s.label} className={`px-5 py-3 text-right font-bold ${delta >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>{delta >= 0 ? '+' : ''}₹{delta.toLocaleString()}</td>
+                })}
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Transactions (General Ledger) ──
+const BUDGET_HEADS = [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES]
+const REIMBURSABLE_STATUSES = ['None', 'Pending', 'Completed']
+
+function generateVoucherNo(date, transactions) {
+  const d = date ? new Date(date) : new Date()
+  const rotaryYearStart = d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1
+  const prefix = `BTM${String(rotaryYearStart).slice(-2)}`
+  const seq = transactions.filter(t => t.voucherNo?.startsWith(prefix)).length + 1
+  return `${prefix}${String(seq).padStart(4, '0')}`
+}
+
+function Transactions({ transactions, saveTransaction, removeTransaction, projects = [], dateRange = {} }) {
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [headFilter, setHeadFilter] = useState('all')
+  const [modeFilter, setModeFilter] = useState('all')
+  const [reimburseFilter, setReimburseFilter] = useState('all')
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [deleteId, setDeleteId] = useState(null)
+  const emptyForm = { date: new Date().toISOString().split('T')[0], voucherNo: '', type: 'Expense', budgetHead: EXPENSE_CATEGORIES[0], description: '', amount: 0, mode: 'Cash', approvedBy: 'Treasurer', paidBy: '', project: '', reimbursableStatus: 'None' }
+  const [form, setForm] = useState(emptyForm)
+
+  const resetForm = () => { setForm(emptyForm); setEditingId(null); setShowForm(false) }
+
+  const handleSave = async () => {
+    if (!form.date || !form.amount) return
+    if (!editingId) form.voucherNo = generateVoucherNo(form.date, transactions)
+    const id = editingId || Date.now().toString()
+    await saveTransaction({ ...form, id, approvedBy: 'Treasurer' })
+    resetForm()
+  }
+
+  const handleEdit = (t) => {
+    setForm({ ...emptyForm, ...t })
+    setEditingId(t.id)
+    setShowForm(true)
+  }
+
+  const { from, to } = dateRange
+  const rangeFiltered = (from || to) ? transactions.filter(t => inRange(t.date, from, to)) : transactions
+
+  const columnFiltered = rangeFiltered.filter(t => {
+    if (typeFilter !== 'all' && t.type !== typeFilter) return false
+    if (headFilter !== 'all' && t.budgetHead !== headFilter) return false
+    if (modeFilter !== 'all' && t.mode !== modeFilter) return false
+    if (reimburseFilter !== 'all' && (t.reimbursableStatus || 'None') !== reimburseFilter) return false
+    return true
+  })
+
+  const filtered = search
+    ? columnFiltered.filter(t => t.description?.toLowerCase().includes(search.toLowerCase()) || t.voucherNo?.toLowerCase().includes(search.toLowerCase()))
+    : columnFiltered
+
+  // Running balance computed over all transactions in chronological order (not affected by filters)
+  const sortedAll = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date))
+  const balanceById = {}
+  let running = 0
+  sortedAll.forEach(t => {
+    running += (t.type === 'Income' ? (t.amount || 0) : -(t.amount || 0))
+    balanceById[t.id] = running
+  })
+
+  const sortedFiltered = [...filtered].sort((a, b) => new Date(a.date) - new Date(b.date))
+
+  const totalIncome = filtered.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
+  const totalExpense = filtered.filter(t => t.type === 'Expense').reduce((s, t) => s + (t.amount || 0), 0)
+  const activeColumnFilters = [typeFilter, headFilter, modeFilter, reimburseFilter].filter(f => f !== 'all').length
+  const resetColumnFilters = () => { setTypeFilter('all'); setHeadFilter('all'); setModeFilter('all'); setReimburseFilter('all') }
+
+  const exportCSV = () => {
+    const headers = ['Date', 'Voucher No', 'Type', 'Budget Head', 'Description', 'Income (₹)', 'Expense (₹)', 'Mode', 'Approved By', 'Balance (₹)', 'Paid By', 'Project', 'Reimbursable Status']
+    const rows = sortedFiltered.map(t => [
+      t.date ? new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+      `"${t.voucherNo || ''}"`, t.type, `"${t.budgetHead || ''}"`, `"${t.description || ''}"`,
+      t.type === 'Income' ? (t.amount || 0) : 0,
+      t.type === 'Expense' ? (t.amount || 0) : 0,
+      t.mode || '', `"${t.approvedBy || 'Treasurer'}"`, balanceById[t.id] ?? 0,
+      `"${t.paidBy || ''}"`, `"${t.project || ''}"`, t.reimbursableStatus || 'None'
+    ].join(','))
+    rows.push(['', '', '', '', '"TOTAL"', totalIncome, totalExpense, '', '', '', '', '', ''].join(','))
+    const csv = '﻿' + [headers.join(','), ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `rotaract-transactions-${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div>
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="flex-1 relative">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-rotary-slate dark:text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <input className={`${inputClass} !pl-10`} placeholder="Search description or voucher no..." value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <button onClick={exportCSV} disabled={transactions.length === 0} className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm font-medium text-rotary-charcoal dark:text-white/60 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors shrink-0 disabled:opacity-40">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+          Export
+        </button>
+        <button onClick={() => { if (showForm && !editingId) resetForm(); else { resetForm(); setShowForm(true) } }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-rotary-blue text-white text-sm font-semibold hover:bg-rotary-blue-dark transition-colors shrink-0">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={showForm ? "M6 18L18 6M6 6l12 12" : "M12 4v16m8-8H4"} /></svg>
+          {showForm ? 'Cancel' : 'Add Transaction'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Income</p>
+          <p className="text-xl font-display font-bold text-green-600 dark:text-green-400">₹{totalIncome.toLocaleString()}</p>
+        </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Expense</p>
+          <p className="text-xl font-display font-bold text-red-500">₹{totalExpense.toLocaleString()}</p>
+        </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Net</p>
+          <p className={`text-xl font-display font-bold ${totalIncome - totalExpense >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+            {totalIncome - totalExpense >= 0 ? '+' : ''}₹{(totalIncome - totalExpense).toLocaleString()}
+          </p>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {showForm && (
+          <motion.div className="mb-6 bg-white dark:bg-rotary-navy-light rounded-xl p-5 border border-gray-100 dark:border-white/5" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
+            <h4 className="font-display font-semibold mb-4">{editingId ? 'Edit Transaction' : 'New Transaction'}</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Date *</label>
+                <input className={inputClass} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Voucher No</label>
+                <input className={`${inputClass} !bg-gray-100 dark:!bg-white/5 !text-rotary-slate dark:!text-white/40 cursor-not-allowed`} value={editingId ? form.voucherNo : 'Auto-generated on save'} readOnly disabled />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Type</label>
+                <select className={inputClass} value={form.type} onChange={e => {
+                  const type = e.target.value
+                  setForm({ ...form, type, budgetHead: (type === 'Income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES)[0] })
+                }}>
+                  <option value="Income">Income</option>
+                  <option value="Expense">Expense</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Budget Head</label>
+                <select className={inputClass} value={form.budgetHead} onChange={e => setForm({ ...form, budgetHead: e.target.value })}>
+                  {(form.type === 'Income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+              </div>
+              <div className="col-span-2 md:col-span-2">
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Description</label>
+                <input className={inputClass} placeholder="What is this for?" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Amount (₹) *</label>
+                <input className={inputClass} type="number" min="0" value={form.amount || ''} onChange={e => setForm({ ...form, amount: parseInt(e.target.value) || 0 })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Mode</label>
+                <select className={inputClass} value={form.mode} onChange={e => setForm({ ...form, mode: e.target.value })}>
+                  {PAYMENT_MODES.map(mode => <option key={mode} value={mode}>{mode}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Approved By</label>
+                <input className={`${inputClass} !bg-gray-100 dark:!bg-white/5 !text-rotary-slate dark:!text-white/40 cursor-not-allowed`} value="Treasurer" readOnly disabled />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Paid By</label>
+                <input className={inputClass} value={form.paidBy} onChange={e => setForm({ ...form, paidBy: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Project</label>
+                <select className={inputClass} value={form.project} onChange={e => setForm({ ...form, project: e.target.value })}>
+                  <option value="">— None —</option>
+                  {projects.map(p => <option key={p.id} value={p.title}>{p.title}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Reimbursable Status</label>
+                <select className={inputClass} value={form.reimbursableStatus} onChange={e => setForm({ ...form, reimbursableStatus: e.target.value })}>
+                  {REIMBURSABLE_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button onClick={handleSave} disabled={!form.date || !form.amount} className="px-5 py-2 rounded-lg bg-rotary-gold text-rotary-navy font-semibold text-sm disabled:opacity-50 transition-colors">{editingId ? 'Save' : 'Add Transaction'}</button>
+              {editingId && <button onClick={resetForm} className="px-5 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-sm">Cancel</button>}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Column filters ── */}
+      <div className="flex flex-wrap items-end gap-3 mb-6 bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 p-4">
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Type</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+            <option value="all">All Types</option>
+            <option value="Income">Income</option>
+            <option value="Expense">Expense</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Budget Head</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={headFilter} onChange={e => setHeadFilter(e.target.value)}>
+            <option value="all">All Heads</option>
+            {BUDGET_HEADS.map(h => <option key={h} value={h}>{h}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Mode</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={modeFilter} onChange={e => setModeFilter(e.target.value)}>
+            <option value="all">All Modes</option>
+            {PAYMENT_MODES.map(mode => <option key={mode} value={mode}>{mode}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Reimbursable</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={reimburseFilter} onChange={e => setReimburseFilter(e.target.value)}>
+            <option value="all">All</option>
+            {REIMBURSABLE_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        {activeColumnFilters > 0 && (
+          <button onClick={resetColumnFilters} className="text-xs font-medium text-rotary-blue hover:underline mb-2.5">
+            Clear filters ({activeColumnFilters})
+          </button>
+        )}
+      </div>
+
+      <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-white/5">
+                <th className="sticky left-0 z-10 bg-gray-50 dark:bg-rotary-navy-light text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Date</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Voucher No</th>
+                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Type</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Budget Head</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Description</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Income</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Expense</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Mode</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Approved By</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Balance</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Paid By</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Project</th>
+                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Reimbursable</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedFiltered.map(t => (
+                <tr key={t.id} className="group border-b border-gray-50 dark:border-white/[0.03] hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
+                  <td className="sticky left-0 z-10 bg-white dark:bg-rotary-navy-light group-hover:bg-gray-50 dark:group-hover:bg-white/[0.02] px-5 py-3 text-xs text-rotary-slate dark:text-white/40 whitespace-nowrap">
+                    {t.date ? new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                  </td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.voucherNo || '—'}</td>
+                  <td className="px-5 py-3 text-center">
+                    <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${t.type === 'Income' ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'}`}>{t.type}</span>
+                  </td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.budgetHead || '—'}</td>
+                  <td className="px-5 py-3">{t.description || '—'}</td>
+                  <td className="px-5 py-3 text-right text-green-600 dark:text-green-400">{t.type === 'Income' ? `₹${(t.amount || 0).toLocaleString()}` : '—'}</td>
+                  <td className="px-5 py-3 text-right text-red-500">{t.type === 'Expense' ? `₹${(t.amount || 0).toLocaleString()}` : '—'}</td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">
+                    {t.mode ? <span className="inline-block px-2 py-0.5 rounded-md bg-gray-100 dark:bg-white/5 font-medium">{t.mode}</span> : <span className="text-rotary-slate dark:text-white/20">—</span>}
+                  </td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.approvedBy || 'Treasurer'}</td>
+                  <td className={`px-5 py-3 text-right font-medium ${(balanceById[t.id] ?? 0) >= 0 ? 'text-rotary-charcoal dark:text-white' : 'text-red-500'}`}>
+                    {(balanceById[t.id] ?? 0) >= 0 ? '' : '-'}₹{Math.abs(balanceById[t.id] ?? 0).toLocaleString()}
+                  </td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.paidBy || '—'}</td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.project || '—'}</td>
+                  <td className="px-5 py-3 text-center">
+                    {t.reimbursableStatus && t.reimbursableStatus !== 'None' ? (
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${t.reimbursableStatus === 'Completed' ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400'}`}>{t.reimbursableStatus}</span>
+                    ) : <span className="text-rotary-slate dark:text-white/20 text-xs">—</span>}
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button onClick={() => handleEdit(t)} className="w-7 h-7 rounded-lg bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-white/10 transition-colors">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button onClick={() => setDeleteId(t.id)} className="w-7 h-7 rounded-lg bg-red-50 dark:bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {sortedFiltered.length === 0 && (
+                <tr><td colSpan={14} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No transactions yet. Add one above.</td></tr>
+              )}
+            </tbody>
+            {sortedFiltered.length > 0 && (
+              <tfoot>
+                <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
+                  <td className="px-5 py-3 font-semibold" colSpan={5}>Total ({sortedFiltered.length})</td>
+                  <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalIncome.toLocaleString()}</td>
+                  <td className="px-5 py-3 text-right font-semibold text-red-500">₹{totalExpense.toLocaleString()}</td>
+                  <td colSpan={7}></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {deleteId && (
+          <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="absolute inset-0 bg-black/60" onClick={() => setDeleteId(null)} />
+            <motion.div className="relative bg-white dark:bg-rotary-navy-light rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100 dark:border-white/10" initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}>
+              <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-500/10 flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <h3 className="font-display font-bold text-lg mb-1">Remove Transaction?</h3>
+              <p className="text-sm text-gray-400 dark:text-white/50 mb-6">This will permanently remove this transaction record.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-white/10 text-sm font-semibold hover:bg-gray-50 transition-colors">Cancel</button>
+                <button onClick={async () => { await removeTransaction(deleteId); setDeleteId(null) }} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">Remove</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// ── Reimbursements ──
+function Reimbursements({ transactions, saveTransaction, dateRange = {} }) {
+  const [statusFilter, setStatusFilter] = useState('Pending')
+
+  const reimbursable = transactions.filter(t => t.reimbursableStatus && t.reimbursableStatus !== 'None')
+  const { from, to } = dateRange
+  const rangeFiltered = (from || to) ? reimbursable.filter(t => inRange(t.date, from, to)) : reimbursable
+
+  const counts = {
+    all: rangeFiltered.length,
+    Pending: rangeFiltered.filter(t => t.reimbursableStatus === 'Pending').length,
+    Completed: rangeFiltered.filter(t => t.reimbursableStatus === 'Completed').length,
+  }
+
+  const filtered = statusFilter === 'all' ? rangeFiltered : rangeFiltered.filter(t => t.reimbursableStatus === statusFilter)
+  const sorted = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date))
+
+  const totalPending = rangeFiltered.filter(t => t.reimbursableStatus === 'Pending').reduce((s, t) => s + (t.amount || 0), 0)
+  const totalCompleted = rangeFiltered.filter(t => t.reimbursableStatus === 'Completed').reduce((s, t) => s + (t.amount || 0), 0)
+
+  const markReimbursed = async (t) => {
+    await saveTransaction({ ...t, reimbursableStatus: 'Completed', reimbursedDate: new Date().toISOString().split('T')[0] })
+  }
+  const markPending = async (t) => {
+    await saveTransaction({ ...t, reimbursableStatus: 'Pending', reimbursedDate: '' })
+  }
+
+  return (
+    <div>
+      <div className="mb-6">
+        <h2 className="font-display font-bold text-lg">Reimbursements</h2>
+        <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">Money owed back to members who paid for club expenses out of pocket</p>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 mb-6">
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Pending</p>
+          <p className="text-xl font-display font-bold text-amber-600 dark:text-amber-400">₹{totalPending.toLocaleString()}</p>
+        </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Reimbursed</p>
+          <p className="text-xl font-display font-bold text-green-600 dark:text-green-400">₹{totalCompleted.toLocaleString()}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-6">
+        {[
+          { key: 'Pending', label: 'Pending', color: 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400', active: 'bg-amber-500 text-white' },
+          { key: 'Completed', label: 'Reimbursed', color: 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400', active: 'bg-green-600 text-white' },
+          { key: 'all', label: 'All', color: 'bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60', active: 'bg-rotary-blue text-white' },
+        ].map(({ key, label, color, active }) => (
+          <button
+            key={key}
+            onClick={() => setStatusFilter(key)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${statusFilter === key ? active : color}`}
+          >
+            {label}
+            <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold ${statusFilter === key ? 'bg-white/20' : 'bg-black/5 dark:bg-white/10'}`}>
+              {counts[key] ?? counts.all}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-white/5">
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Date</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Voucher No</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Description</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Paid By</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Budget Head</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Amount</th>
+                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Status</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(t => (
+                <tr key={t.id} className="border-b border-gray-50 dark:border-white/[0.03] hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40 whitespace-nowrap">
+                    {t.date ? new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                  </td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.voucherNo || '—'}</td>
+                  <td className="px-5 py-3">{t.description || '—'}</td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.paidBy || '—'}</td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.budgetHead || '—'}</td>
+                  <td className="px-5 py-3 text-right font-semibold">₹{(t.amount || 0).toLocaleString()}</td>
+                  <td className="px-5 py-3 text-center">
+                    <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${t.reimbursableStatus === 'Completed' ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400'}`}>
+                      {t.reimbursableStatus === 'Completed' ? 'Reimbursed' : 'Pending'}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    {t.reimbursableStatus === 'Completed' ? (
+                      <button onClick={() => markPending(t)} className="text-xs font-medium text-rotary-slate dark:text-white/40 hover:underline">Reopen</button>
+                    ) : (
+                      <button onClick={() => markReimbursed(t)} className="px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-semibold hover:bg-green-700 transition-colors">Mark Reimbursed</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {sorted.length === 0 && (
+                <tr><td colSpan={8} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">Nothing here — mark a transaction "Reimbursable" in Transactions to track it.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Assets ──
+const ASSET_CATEGORIES = ['Banners & Standees', 'Merchandise', 'Equipment', 'Furniture', 'Electronics', 'Awards & Trophies', 'Other']
+const ASSET_CONDITIONS = ['New', 'Good', 'Fair', 'Damaged', 'Disposed']
+
+function Assets({ assets, saveAsset, removeAsset }) {
+  const [search, setSearch] = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [deleteId, setDeleteId] = useState(null)
+  const emptyForm = { name: '', category: ASSET_CATEGORIES[0], quantity: 1, value: 0, condition: 'New', location: '', purchaseDate: '', note: '' }
+  const [form, setForm] = useState(emptyForm)
+
+  const resetForm = () => { setForm(emptyForm); setEditingId(null); setShowForm(false) }
+
+  const handleSave = async () => {
+    if (!form.name) return
+    const id = editingId || Date.now().toString()
+    await saveAsset({ ...form, id })
+    resetForm()
+  }
+
+  const handleEdit = (a) => {
+    setForm({ ...emptyForm, ...a })
+    setEditingId(a.id)
+    setShowForm(true)
+  }
+
+  const filtered = search ? assets.filter(a => a.name.toLowerCase().includes(search.toLowerCase())) : assets
+  const totalValue = assets.reduce((s, a) => s + (a.value || 0) * (a.quantity || 1), 0)
+  const activeCount = assets.filter(a => a.condition !== 'Disposed').length
+
+  return (
+    <div>
+      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+        <div className="flex-1 relative">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-rotary-slate dark:text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <input className={`${inputClass} !pl-10`} placeholder="Search assets..." value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <button onClick={() => { if (showForm && !editingId) resetForm(); else { resetForm(); setShowForm(true) } }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-rotary-blue text-white text-sm font-semibold hover:bg-rotary-blue-dark transition-colors shrink-0">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={showForm ? "M6 18L18 6M6 6l12 12" : "M12 4v16m8-8H4"} /></svg>
+          {showForm ? 'Cancel' : 'Add Asset'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Total Assets</p>
+          <p className="text-xl font-display font-bold text-rotary-charcoal dark:text-white">{activeCount}</p>
+        </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Total Value</p>
+          <p className="text-xl font-display font-bold text-rotary-blue">₹{totalValue.toLocaleString()}</p>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {showForm && (
+          <motion.div className="mb-6 bg-white dark:bg-rotary-navy-light rounded-xl p-5 border border-gray-100 dark:border-white/5" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
+            <h4 className="font-display font-semibold mb-4">{editingId ? 'Edit Asset' : 'New Asset'}</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="col-span-2">
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Name *</label>
+                <input className={inputClass} placeholder="e.g. Club Banner (6x4)" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Category</label>
+                <select className={inputClass} value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+                  {ASSET_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Condition</label>
+                <select className={inputClass} value={form.condition} onChange={e => setForm({ ...form, condition: e.target.value })}>
+                  {ASSET_CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Quantity</label>
+                <input className={inputClass} type="number" min="1" value={form.quantity || ''} onChange={e => setForm({ ...form, quantity: parseInt(e.target.value) || 1 })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Value per unit (₹)</label>
+                <input className={inputClass} type="number" min="0" value={form.value || ''} onChange={e => setForm({ ...form, value: parseInt(e.target.value) || 0 })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Location</label>
+                <input className={inputClass} placeholder="e.g. Secretary's custody" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Purchase Date</label>
+                <input className={inputClass} type="date" value={form.purchaseDate} onChange={e => setForm({ ...form, purchaseDate: e.target.value })} />
+              </div>
+              <div className="col-span-2 md:col-span-4">
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Note</label>
+                <input className={inputClass} placeholder="Optional notes" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button onClick={handleSave} disabled={!form.name} className="px-5 py-2 rounded-lg bg-rotary-gold text-rotary-navy font-semibold text-sm disabled:opacity-50 transition-colors">{editingId ? 'Save' : 'Add Asset'}</button>
+              {editingId && <button onClick={resetForm} className="px-5 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-sm">Cancel</button>}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-white/5">
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Name</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Category</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Qty</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Total Value</th>
+                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Condition</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Location</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Purchased</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(a => (
+                <tr key={a.id} className="border-b border-gray-50 dark:border-white/[0.03] hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
+                  <td className="px-5 py-3 font-medium">{a.name}{a.note && <p className="text-xs text-rotary-slate dark:text-white/30 font-normal mt-0.5">{a.note}</p>}</td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{a.category}</td>
+                  <td className="px-5 py-3 text-right">{a.quantity || 1}</td>
+                  <td className="px-5 py-3 text-right font-semibold">₹{((a.value || 0) * (a.quantity || 1)).toLocaleString()}</td>
+                  <td className="px-5 py-3 text-center">
+                    <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${a.condition === 'Disposed' ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400' : a.condition === 'Damaged' ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400'}`}>{a.condition}</span>
+                  </td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{a.location || '—'}</td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">{a.purchaseDate ? new Date(a.purchaseDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
+                  <td className="px-5 py-3 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button onClick={() => handleEdit(a)} className="w-7 h-7 rounded-lg bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-white/10 transition-colors">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button onClick={() => setDeleteId(a.id)} className="w-7 h-7 rounded-lg bg-red-50 dark:bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={8} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No assets recorded yet.</td></tr>
+              )}
+            </tbody>
+            {filtered.length > 0 && (
+              <tfoot>
+                <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
+                  <td className="px-5 py-3 font-semibold" colSpan={3}>Total ({filtered.length})</td>
+                  <td className="px-5 py-3 text-right font-bold">₹{filtered.reduce((s, a) => s + (a.value || 0) * (a.quantity || 1), 0).toLocaleString()}</td>
+                  <td colSpan={4}></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {deleteId && (
+          <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="absolute inset-0 bg-black/60" onClick={() => setDeleteId(null)} />
+            <motion.div className="relative bg-white dark:bg-rotary-navy-light rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100 dark:border-white/10" initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}>
+              <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-500/10 flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <h3 className="font-display font-bold text-lg mb-1">Remove Asset?</h3>
+              <p className="text-sm text-gray-400 dark:text-white/50 mb-6">This will permanently remove this asset record.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-white/10 text-sm font-semibold hover:bg-gray-50 transition-colors">Cancel</button>
+                <button onClick={async () => { await removeAsset(deleteId); setDeleteId(null) }} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">Remove</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -1182,15 +2289,23 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
   const [activeTab, setActiveTab] = useState('dues')
   const [showRateEdit, setShowRateEdit] = useState(false)
   const [dateRange, setDateRange] = useState({ from: '', to: '' })
+  const rateSaveTimerRef = useRef(null)
 
   const { data: leaders } = useCollection('leaders')
   const { data: members, loading: membersLoading, save: saveMember, remove: removeMember } = useCollection('treasurer_members')
   const { data: eventLedger, loading: eventsLoading, save: saveEvent, remove: removeEvent } = useCollection('treasurer_events')
   const { data: sponsorships, loading: sponsorshipsLoading, save: saveSponsorship, remove: removeSponsorship } = useCollection('treasurer_sponsorships')
+  const { data: transactions, loading: transactionsLoading, save: saveTransaction, remove: removeTransaction } = useCollection('treasurer_transactions')
+  const { data: assets, loading: assetsLoading, save: saveAsset, remove: removeAsset } = useCollection('treasurer_assets')
   const { data: dueRates, save: saveDueRates } = useDocument('settings', 'due_rates', { student: 1000, working: 2500 })
+  const [rateForm, setRateForm] = useState(dueRates)
+  const rateDirtyRef = useRef(false)
+  useEffect(() => { if (!rateDirtyRef.current) setRateForm(dueRates) }, [dueRates])
+  const { data: forecast, save: saveForecast } = useDocument('settings', 'annual_forecast', DEFAULT_FORECAST)
+  const { data: approvedBudget, save: saveApprovedBudget } = useDocument('settings', 'approved_budget', Object.fromEntries(EXPENSE_CATEGORIES.map(c => [c, 0])))
   const { data: projects = [] } = useCollection('projects')
 
-  const loading = membersLoading || eventsLoading || sponsorshipsLoading
+  const loading = membersLoading || eventsLoading || sponsorshipsLoading || transactionsLoading || assetsLoading
 
   useEffect(() => {
     if (membersLoading || leaders.length === 0) return
@@ -1210,22 +2325,42 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
     toRemove.forEach(m => removeMember(m.id))
   }, [membersLoading, leaders, members, dueRates, saveMember, removeMember])
 
+  const updateDueRate = (field, value) => {
+    const next = { ...rateForm, [field]: parseInt(value) || 0 }
+    setRateForm(next)
+    rateDirtyRef.current = true
+    clearTimeout(rateSaveTimerRef.current)
+    rateSaveTimerRef.current = setTimeout(() => {
+      saveDueRates(next)
+      rateDirtyRef.current = false
+    }, 600)
+  }
+
   const applyRatesToAll = async () => {
+    clearTimeout(rateSaveTimerRef.current)
+    rateDirtyRef.current = false
+    await saveDueRates(rateForm)
     await Promise.all(
       members.map(m => {
         const leader = leaders.find(l => l.name?.toLowerCase() === m.name?.toLowerCase())
         const type = leader?.memberType || 'student'
-        return saveMember({ ...m, annualDue: type === 'working' ? dueRates.working : dueRates.student })
+        return saveMember({ ...m, annualDue: type === 'working' ? rateForm.working : rateForm.student })
       })
     )
     setShowRateEdit(false)
   }
 
   const tabs = [
+    { id: 'report', label: 'Report', icon: 'M9 17v-6h2v6H9zm4 0V7h2v10h-2zm-8 0v-3h2v3H5zm-2 4h18v2H3v-2zM3 3h18v2H3V3z' },
     { id: 'dues', label: 'Members Dues', icon: 'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z' },
+    { id: 'transactions', label: 'Transactions', icon: 'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2z' },
     { id: 'expenses', label: 'Event Expenses', icon: 'M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z' },
     { id: 'sponsorships', label: 'Sponsorships', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
-    { id: 'balance', label: 'Balance Sheet', icon: 'M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3' }
+    { id: 'balance', label: 'Balance Sheet', icon: 'M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3' },
+    { id: 'budgetActual', label: 'Budget vs Actual', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm10 0V9a2 2 0 00-2-2h-2a2 2 0 00-2 2v10m0 0a2 2 0 002 2h2a2 2 0 002-2z' },
+    { id: 'reimbursements', label: 'Reimbursements', icon: 'M17 14v6m-3-3h6M6 10h2a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zm0 10h2a2 2 0 002-2v-2a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zM14 6h4M14 10h4' },
+    { id: 'assets', label: 'Assets', icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0H5m14 0h2M5 21H3m8-14h.01M11 11h.01M11 15h.01M15 7h.01M15 11h.01M15 15h.01M7 7h.01M7 11h.01M7 15h.01' },
+    { id: 'forecast', label: 'Forecast', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' }
   ]
 
   return (
@@ -1257,7 +2392,7 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
           </div>
         ) : (
           <>
-            <SummaryCards members={members} events={eventLedger} sponsorships={sponsorships} dateRange={dateRange} />
+            <SummaryCards members={members} events={eventLedger} sponsorships={sponsorships} transactions={transactions} dateRange={dateRange} />
 
             <div className="mb-8 bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 p-5">
               <div className="flex items-center justify-between mb-1">
@@ -1268,11 +2403,11 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
                 <div className="grid grid-cols-2 gap-4 mt-3">
                   <div>
                     <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Student (₹/year)</label>
-                    <input className={inputClass} type="number" min="0" value={dueRates.student} onChange={e => saveDueRates({ ...dueRates, student: parseInt(e.target.value) || 0 })} />
+                    <input className={inputClass} type="number" min="0" value={rateForm.student} onChange={e => updateDueRate('student', e.target.value)} />
                   </div>
                   <div>
                     <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Working Professional (₹/year)</label>
-                    <input className={inputClass} type="number" min="0" value={dueRates.working} onChange={e => saveDueRates({ ...dueRates, working: parseInt(e.target.value) || 0 })} />
+                    <input className={inputClass} type="number" min="0" value={rateForm.working} onChange={e => updateDueRate('working', e.target.value)} />
                   </div>
                   <div className="col-span-2">
                     <button onClick={applyRatesToAll} className="px-5 py-2 rounded-lg bg-rotary-gold text-rotary-navy font-semibold text-sm hover:bg-rotary-gold-light transition-colors">Apply to All Members</button>
@@ -1304,10 +2439,16 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
               ))}
             </div>
 
-            {activeTab === 'dues' && <MembersDues members={members} saveMember={saveMember} removeMember={removeMember} dateRange={dateRange} />}
+            {activeTab === 'report' && <TreasurerReports members={members} leaders={leaders} transactions={transactions} forecast={forecast} approvedBudget={approvedBudget} />}
+            {activeTab === 'dues' && <MembersDues members={members} leaders={leaders} saveMember={saveMember} removeMember={removeMember} dateRange={dateRange} />}
+            {activeTab === 'transactions' && <Transactions transactions={transactions} saveTransaction={saveTransaction} removeTransaction={removeTransaction} projects={projects} dateRange={dateRange} />}
             {activeTab === 'expenses' && <EventExpenses eventLedger={eventLedger} saveEvent={saveEvent} removeEvent={removeEvent} dateRange={dateRange} projects={projects} />}
             {activeTab === 'sponsorships' && <Sponsorships sponsorships={sponsorships} saveSponsorship={saveSponsorship} removeSponsorship={removeSponsorship} dateRange={dateRange} />}
-            {activeTab === 'balance' && <BalanceSheet members={members} eventLedger={eventLedger} sponsorships={sponsorships} dateRange={dateRange} />}
+            {activeTab === 'balance' && <BalanceSheet members={members} eventLedger={eventLedger} sponsorships={sponsorships} transactions={transactions} dateRange={dateRange} />}
+            {activeTab === 'budgetActual' && <BudgetVsActual approvedBudget={approvedBudget} saveApprovedBudget={saveApprovedBudget} transactions={transactions} forecast={forecast} />}
+            {activeTab === 'reimbursements' && <Reimbursements transactions={transactions} saveTransaction={saveTransaction} dateRange={dateRange} />}
+            {activeTab === 'assets' && <Assets assets={assets} saveAsset={saveAsset} removeAsset={removeAsset} />}
+            {activeTab === 'forecast' && <Forecast forecast={forecast} saveForecast={saveForecast} />}
           </>
         )}
       </div>
