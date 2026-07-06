@@ -8,6 +8,7 @@ Allow: /contact
 Allow: /blog
 Allow: /gallery
 Allow: /privacy
+Allow: /join
 
 Disallow: /treasurer
 Disallow: /attendance
@@ -17,5 +18,7 @@ Disallow: /analytics
 Disallow: /documents
 Disallow: /users
 Disallow: /newsletter
+Disallow: /membership-admin
+Disallow: /link-redirects
 
 Sitemap: https://rotaract.btm.org.in/sitemap.xml

@@ -49,9 +49,17 @@ const SectionLoader = () => (
   </div>
 )
 
+// Search engines and link-preview crawlers must always be able to read the
+// real site — Maintenance Mode is a human-facing "we're working on it"
+// splash, not something that should also take the site out of Google's
+// index for however long it's on. Known bot user agents skip both the
+// intro splash and the maintenance gate entirely.
+const BOT_UA_PATTERN = /bot|crawl|spider|slurp|googlebot|bingbot|duckduckbot|baiduspider|yandex|facebookexternalhit|twitterbot|linkedinbot|whatsapp|telegrambot|slackbot|discordbot|pinterest|ahrefsbot|semrushbot|mj12bot|dotbot|embedly|quora link preview|w3c_validator|redditbot|applebot/i
+const IS_BOT = typeof navigator !== 'undefined' && BOT_UA_PATTERN.test(navigator.userAgent || '')
+
 export default function App() {
   const [showIntro, setShowIntro] = useState(
-    !window.location.pathname.startsWith('/r/') && !sessionStorage.getItem('introShown')
+    !IS_BOT && !window.location.pathname.startsWith('/r/') && !sessionStorage.getItem('introShown')
   )
   const [isDark, setIsDark] = useState(false)
 const [isAdmin, setIsAdmin] = useState(() => !!sessionStorage.getItem('adminPerms'))
@@ -233,7 +241,7 @@ useEffect(() => {
         </Suspense>
       )}
 
-      {!showIntro && currentPage !== 'redirect' && currentPage !== 'joinForm' && siteSettings.maintenanceMode && !isAdmin && (
+      {!showIntro && currentPage !== 'redirect' && currentPage !== 'joinForm' && siteSettings.maintenanceMode && !isAdmin && !IS_BOT && (
         <MaintenancePage resumeAt={siteSettings.maintenanceEndTime || null} onLogin={(perms) => {
           setIsAdmin(true)
           setPermissions(perms)
@@ -249,7 +257,7 @@ useEffect(() => {
         }} />
       )}
 
-      {!showIntro && currentPage !== 'redirect' && (!siteSettings.maintenanceMode || isAdmin || currentPage === 'joinForm') && (
+      {!showIntro && currentPage !== 'redirect' && (!siteSettings.maintenanceMode || isAdmin || IS_BOT || currentPage === 'joinForm') && (
         <>
           <ScrollProgress />
           <Navbar
