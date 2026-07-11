@@ -1,41 +1,84 @@
+// ⚠️ DEPLOY ORDER MATTERS — read before publishing this in the Firebase Console.
+//
+// This version enforces the app's role/permission system server-side (the
+// previous version only checked `request.auth != null`, so ANY signed-in
+// account — regardless of assigned role — could write to every collection,
+// including granting itself Super Admin). It relies on each admin's
+// `users` doc living at users/{their-own-uid}, which the app now creates
+// automatically the moment they log in (see migrateUserDocToUid in
+// src/firebase.js) — but that migration needs the OLD, permissive rules to
+// run once for each existing admin.
+//
+// 1. Ship the current app code (already does the self-migration on login)
+//    with these rules UNCHANGED in the Firebase Console for now.
+// 2. Have every active admin log in once (or wait for their next natural
+//    login).
+// 3. In Firebase Console → Firestore → Data → users, confirm every doc ID
+//    is a ~28-character Firebase Auth uid, not a shorter auto-generated ID.
+// 4. Only once step 3 is confirmed, paste this file's rules into
+//    Firebase Console → Firestore → Rules → Publish.
+//
+// Publishing before step 3 will make writes fail for any admin who hasn't
+// logged in since step 1 (reads still work, so they can always log in to
+// self-heal — but until they do, their writes will be rejected).
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Public read-only collections ──────────────────────────────────────
-    match /projects/{doc}    { allow read: if true; allow write: if request.auth != null; }
-    match /events/{doc}      { allow read: if true; allow write: if request.auth != null; }
-    match /leaders/{doc}     { allow read: if true; allow write: if request.auth != null; }
-    match /gallery/{doc}     { allow read: if true; allow write: if request.auth != null; }
-    match /testimonials/{doc}{ allow read: if true; allow write: if request.auth != null; }
-    match /blogs/{doc}       { allow read: if true; allow write: if request.auth != null; }
-    match /settings/{doc}    { allow read: if true; allow write: if request.auth != null; }
-    match /partners/{doc}    { allow read: if true; allow write: if request.auth != null; }
-    match /impact/{doc}      { allow read: if true; allow write: if request.auth != null; }
-    match /milestones/{doc}  { allow read: if true; allow write: if request.auth != null; }
-    match /archives/{doc}    { allow read: if true; allow write: if request.auth != null; }
+    // ── Role helpers ────────────────────────────────────────────────────
+    // Every real admin account has a `users/{uid}` doc keyed by their own
+    // Firebase Auth uid (see migrateUserDocToUid in src/firebase.js — a
+    // one-time, self-service migration each admin's login performs). These
+    // helpers read that doc to check the *caller's own* stored role, so
+    // permissions are enforced here, not just in the React UI.
+    function myUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function isKnownUser() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function isSuperAdmin() {
+      return isKnownUser() && myUser().isSuperAdmin == true;
+    }
+    function hasPermission(key) {
+      return isKnownUser() && (myUser().isSuperAdmin == true || myUser().permissions[key] == true);
+    }
 
-    // ── RSVP — public write (anyone can RSVP), admin read ────────────────
+    // ── Public read-only content collections ──────────────────────────────
+    match /projects/{doc}     { allow read: if true; allow write: if hasPermission('projects'); }
+    match /events/{doc}       { allow read: if true; allow write: if hasPermission('events'); }
+    match /leaders/{doc}      { allow read: if true; allow write: if hasPermission('homepage'); }
+    match /gallery/{doc}      { allow read: if true; allow write: if hasPermission('gallery'); }
+    match /testimonials/{doc} { allow read: if true; allow write: if hasPermission('homepage'); }
+    match /blogs/{doc}        { allow read: if true; allow write: if isKnownUser(); }
+    match /settings/{doc}     { allow read: if true; allow write: if isSuperAdmin(); }
+    match /partners/{doc}     { allow read: if true; allow write: if hasPermission('homepage'); }
+    match /impact/{doc}       { allow read: if true; allow write: if hasPermission('homepage'); }
+    match /milestones/{doc}   { allow read: if true; allow write: if hasPermission('homepage'); }
+    match /archives/{doc}     { allow read: if true; allow write: if isKnownUser(); }
+
+    // ── RSVP — public write (anyone can RSVP), admin read/manage ─────────
     match /rsvps/{doc} {
-      allow read:  if request.auth != null;
+      allow read:  if hasPermission('rsvp');
       allow create: if request.resource.data.name is string
                     && request.resource.data.email is string
                     && request.resource.data.email.size() <= 254;
-      allow update, delete: if request.auth != null;
+      allow update, delete: if hasPermission('rsvp');
     }
 
     // ── Newsletter subscribers — public create, admin read/delete ────────
     match /subscribers/{doc} {
       allow create: if request.resource.data.email is string
                     && request.resource.data.email.size() <= 254;
-      allow read, update, delete: if request.auth != null;
+      allow read, update, delete: if isKnownUser();
     }
 
     // ── Contact form — public create, admin read ──────────────────────────
     match /contacts/{doc} {
       allow create: if request.resource.data.name is string
                     && request.resource.data.email is string;
-      allow read, update, delete: if request.auth != null;
+      allow read, update, delete: if isKnownUser();
     }
 
     // ── Membership applications — public create, admin read/manage ───────
@@ -43,38 +86,55 @@ service cloud.firestore {
       allow create: if request.resource.data.name is string
                     && request.resource.data.email is string
                     && request.resource.data.email.size() <= 254;
-      allow read, update, delete: if request.auth != null;
+      allow read, update, delete: if hasPermission('membership');
     }
 
     // ── Club documents — public docs readable by anyone, admin-only docs need auth ──
     match /club_documents/{doc} {
-      allow read: if resource.data.isPublic == true || request.auth != null;
-      allow write: if request.auth != null;
+      allow read: if resource.data.isPublic == true || isKnownUser();
+      allow write: if isKnownUser();
     }
 
     // ── Admin-only collections ────────────────────────────────────────────
-    match /users/{doc}              { allow read, write: if request.auth != null; }
-    match /attendance_meetings/{doc}{ allow read, write: if request.auth != null; }
-    match /treasury/{doc}           { allow read, write: if request.auth != null; }
-    match /treasurer_members/{doc}       { allow read, write: if request.auth != null; }
-    match /treasurer_events/{doc}        { allow read, write: if request.auth != null; }
-    match /treasurer_sponsorships/{doc}  { allow read, write: if request.auth != null; }
-    match /treasurer_transactions/{doc}  { allow read, write: if request.auth != null; }
-    match /treasurer_assets/{doc}        { allow read, write: if request.auth != null; }
-    match /moms/{doc}          { allow read, write: if request.auth != null; }
-    match /auditLog/{doc}      { allow read, write: if request.auth != null; }
-    match /emailReminders/{doc}{ allow read, write: if request.auth != null; }
+    // `users` is the crux of the whole permission system — only a confirmed
+    // super admin may create/edit/delete ANY user record, including their
+    // own. This is what actually closes the privilege-escalation gap; every
+    // other rule above is enforcement, but this one is the root of trust.
+    match /users/{userId}                { allow read: if request.auth != null; allow write: if isSuperAdmin(); }
+    match /attendance_meetings/{doc}     { allow read, write: if hasPermission('attendance'); }
+    match /treasury/{doc}                { allow read, write: if hasPermission('treasurer'); }
+    match /treasurer_members/{doc}       { allow read, write: if hasPermission('treasurer'); }
+    match /treasurer_events/{doc}        { allow read, write: if hasPermission('treasurer'); }
+    match /treasurer_sponsorships/{doc}  { allow read, write: if hasPermission('treasurer'); }
+    match /treasurer_transactions/{doc}  { allow read, write: if hasPermission('treasurer'); }
+    match /treasurer_assets/{doc}        { allow read, write: if hasPermission('treasurer'); }
+    match /moms/{doc}                    { allow read, write: if hasPermission('mom'); }
+    // Ideas are created/edited by avenueProjects, approved by
+    // avenueProjectsApprove, and signed off by treasurer — all three write
+    // to the same doc (different fields), so all three need write access.
+    match /avenueProjects/{doc} {
+      allow read: if isKnownUser();
+      allow write: if hasPermission('avenueProjects') || hasPermission('avenueProjectsApprove') || hasPermission('treasurer');
+    }
+    // Audit trail — anyone known can append an entry for their own action,
+    // but only a super admin can alter or erase existing entries.
+    match /auditLog/{doc} {
+      allow read: if isKnownUser();
+      allow create: if isKnownUser();
+      allow update, delete: if isSuperAdmin();
+    }
+    match /emailReminders/{doc}          { allow read, write: if hasPermission('events'); }
 
     // ── Link redirects — public read (to resolve /r/:slug), admin write ───
     match /links/{doc} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if hasPermission('linkRedirects');
     }
     // ── Link click tracking — public create (visitor hits), admin read ───
     match /linkClicks/{doc} {
-      allow read: if request.auth != null;
+      allow read: if hasPermission('linkRedirects');
       allow create: if request.resource.data.linkId is string;
-      allow update, delete: if request.auth != null;
+      allow update, delete: if hasPermission('linkRedirects');
     }
 
     // ── Deny everything else ──────────────────────────────────────────────

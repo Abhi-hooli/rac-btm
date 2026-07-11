@@ -7,7 +7,7 @@ const SITE_URL = 'https://rotaract.btm.org.in'
 const sections = [
   {
     title: '1. Who We Are',
-    body: `Rotaract Club of Bengaluru BTM ("we", "our", "the Club") is a youth service organisation based in BTM Layout, Bengaluru, Karnataka, India. We operate under Rotary International District 3191 and are reachable at ${CONTACT_EMAIL}.\n\nThis Privacy Policy explains how we collect, use, and protect personal information you provide through our website (${SITE_URL}).`,
+    body: `Rotaract Club of Bengaluru BTM ("we", "our", "the Club") is a youth service organisation based in BTM Layout, Bengaluru, Karnataka, India. We operate under Rotary International District 3191 (RI Club ID 8826232) and are reachable at ${CONTACT_EMAIL}.\n\nThis Privacy Policy explains how we collect, use, and protect personal information you provide through our website (${SITE_URL}).`,
   },
   {
     title: '2. Data We Collect From You',

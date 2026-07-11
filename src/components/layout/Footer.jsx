@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { loadFirestore } from '../../firebase'
+import { backupToSheet } from '../../utils/trash'
 
 const footerLinks = {
   'Quick Links': [
@@ -53,6 +54,7 @@ export default function Footer({ goToPage }) {
       // (auth-only) based on whether the doc exists, so re-subscribing with
       // the same email naturally gets rejected as permission-denied.
       await mod.setDoc(mod.doc(db, 'subscribers', trimmed), { email: trimmed, subscribedAt: mod.serverTimestamp() })
+      backupToSheet('subscribers', trimmed, 'create', { email: trimmed }, 'public form')
       setEmail('')
       setSubState('success')
     } catch (err) {
@@ -79,7 +81,7 @@ export default function Footer({ goToPage }) {
               </div>
             </div>
             <p className="text-white/50 text-sm mb-6 max-w-sm leading-relaxed">
-              Young professionals and students driving change through service, leadership, and fellowship in Bengaluru. Part of Rotary International District 3191.
+              Young professionals and students driving change through service, leadership, and fellowship in Bengaluru. Part of Rotary International District 3191 · RI Club ID 8826232.
             </p>
             <div className="flex gap-2">
               <input

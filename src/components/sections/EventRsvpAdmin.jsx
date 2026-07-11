@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { loadFirestore } from '../../firebase'
+import { softDelete } from '../../utils/trash'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -163,8 +164,7 @@ function EventRsvpPanel({ event, rsvps }) {
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return
     try {
-      const { mod, db } = await loadFirestore()
-      await mod.deleteDoc(mod.doc(db, 'rsvps', deleteTarget.id))
+      await softDelete('rsvps', deleteTarget.id, deleteTarget)
     } catch (err) {
       console.error('Delete RSVP error:', err)
     }
@@ -363,7 +363,7 @@ function EventRsvpPanel({ event, rsvps }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function EventRsvpAdmin({ isAdmin, onBack }) {
+export default function EventRsvpAdmin({ isAdmin, onBack, readOnly = false }) {
 
   if (!isAdmin) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -407,7 +407,7 @@ export default function EventRsvpAdmin({ isAdmin, onBack }) {
     loadFirestore().then(({ mod, db }) => {
       if (cancelled) return
       unsub = mod.onSnapshot(mod.collection(db, 'rsvps'), snap => {
-        setRsvps(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setRsvps(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => !r.deletedAt))
       })
     })
     return () => { cancelled = true; if (unsub) unsub() }
@@ -489,6 +489,13 @@ export default function EventRsvpAdmin({ isAdmin, onBack }) {
           </svg>
           Export All RSVPs
         </button>
+
+        {readOnly && (
+          <div className="sticky top-20 z-10 mb-6 px-4 py-3 rounded-xl bg-rotary-gold/10 border border-rotary-gold/30 text-sm font-medium text-rotary-gold">
+            View only — you don't have edit access to Event RSVPs.
+          </div>
+        )}
+        <div className={readOnly ? 'pointer-events-none select-none opacity-75' : ''}>
         <motion.div
           className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-10"
           initial={{ opacity: 0, y: 12 }}
@@ -679,6 +686,7 @@ export default function EventRsvpAdmin({ isAdmin, onBack }) {
               </div>
             )}
           </motion.div>
+        </div>
         </div>
       </div>
     </div>

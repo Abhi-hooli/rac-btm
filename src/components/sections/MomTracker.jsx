@@ -1,14 +1,55 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { loadFirestore } from '../../firebase'
+import { loadFirestore, getCurrentAdminEmail } from '../../firebase'
+import { softDelete, backupToSheet } from '../../utils/trash'
+import { AVENUES } from './treasurerShared'
+
+const DIRECTOR_AVENUES = [...AVENUES.filter(a => a !== 'Not Applicable'), 'Membership']
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+function getAvenueDirector(members, avenue) {
+  if (!avenue) return ''
+  const match = members.find(m => m.avenue === avenue && ((m.role || '').toLowerCase().includes('director') || (m.role2 || '').toLowerCase().includes('director')))
+  return match?.name || ''
+}
+
+function getBulletPoints(v) {
+  if (Array.isArray(v)) return v.map(item => item.text).filter(Boolean)
+  if (typeof v === 'string' && v) return [v]
+  return []
+}
+
+function getMonthFinancials(transactions, meetingDate) {
+  if (!meetingDate) return { income: 0, expense: 0 }
+  const month = meetingDate.slice(0, 7) // YYYY-MM
+  const inMonth = transactions.filter(t => (t.date || '').slice(0, 7) === month)
+  const income = inMonth.filter(t => t.type === 'Income').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0)
+  const expense = inMonth.filter(t => t.type === 'Expense' && t.reimbursableStatus !== 'Written Off').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0)
+  return { income, expense }
+}
 
 const formatDate = (dateStr) => {
   if (!dateStr) return '—'
   return new Date(dateStr).toLocaleDateString('en-IN', {
     day: 'numeric', month: 'short', year: 'numeric'
   })
+}
+
+const formatDateTime = (ts) => {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit'
+  })
+}
+
+// Newest first. Falls back to the old single-entry fields for items updated before history tracking existed.
+function getStatusHistory(item) {
+  if (Array.isArray(item.statusHistory)) return item.statusHistory
+  if (item.statusUpdatedBy) {
+    return [{ from: item.previousStatus || 'Pending', to: item.status || 'Pending', by: item.statusUpdatedBy, at: item.statusUpdatedAt }]
+  }
+  return []
 }
 
 const STATUS_COLORS = {
@@ -38,6 +79,8 @@ const EMPTY_MOM = {
   totalMembers: '',
   attendees: '',
   agendaItems: [{ text: '' }],
+  presidentUpdate: [{ text: '' }],
+  secretaryUpdate: [{ text: '' }],
   discussionItems: [{ agendaItem: '', discussion: '', decision: '' }],
   actionItems: [{ task: '', owner: '', deadline: '', priority: 'Medium', status: 'Pending' }],
   directorUpdates: [{ avenue: '', update: '' }],
@@ -91,7 +134,43 @@ function StatusBadge({ status, onChange }) {
   )
 }
 
-function DynamicList({ label, items, onChange, fieldKey = 'text', placeholder }) {
+function StatusHistoryLog({ history = [] }) {
+  const [open, setOpen] = useState(false)
+  if (history.length === 0) return null
+  const [latest, ...rest] = history
+
+  const Entry = ({ h }) => (
+    <p className="text-[10px] text-gray-400">
+      {h.from} → {h.to} by <span className="font-semibold text-gray-500">{h.by}</span> · {formatDateTime(h.at)}
+    </p>
+  )
+
+  return (
+    <div className="mt-1.5 pt-1.5 border-t border-gray-100">
+      <div className="flex items-center justify-between gap-2">
+        <Entry h={latest} />
+        {rest.length > 0 && (
+          <button
+            onClick={() => setOpen(o => !o)}
+            className="text-[10px] font-semibold text-rotary-blue hover:underline flex-shrink-0 flex items-center gap-0.5"
+          >
+            {open ? 'Hide' : `+${rest.length} more`}
+            <svg className={`w-2.5 h-2.5 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        )}
+      </div>
+      {open && rest.length > 0 && (
+        <div className="mt-1 space-y-1 pl-2 border-l-2 border-gray-100">
+          {rest.map((h, i) => <Entry key={i} h={h} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DynamicList({ label, items, onChange, fieldKey = 'text', placeholder, bulleted = false }) {
   const update = (idx, value) => {
     const next = [...items]
     next[idx] = { ...next[idx], [fieldKey]: value }
@@ -106,7 +185,11 @@ function DynamicList({ label, items, onChange, fieldKey = 'text', placeholder })
       <div className="space-y-2">
         {items.map((item, idx) => (
           <div key={idx} className="flex items-center gap-2">
-            <span className="w-5 h-5 rounded-full bg-rotary-blue/10 text-rotary-blue text-xs font-bold flex items-center justify-center flex-shrink-0">{idx + 1}</span>
+            {bulleted ? (
+              <span className="w-5 h-5 flex items-center justify-center flex-shrink-0 text-rotary-blue text-lg leading-none">•</span>
+            ) : (
+              <span className="w-5 h-5 rounded-full bg-rotary-blue/10 text-rotary-blue text-xs font-bold flex items-center justify-center flex-shrink-0">{idx + 1}</span>
+            )}
             <input
               type="text"
               value={item[fieldKey]}
@@ -180,6 +263,67 @@ function MultiFieldList({ label, items, onChange, fields, addRow, placeholder = 
   )
 }
 
+// ─── Director Updates List (avenue → director auto-matched from Our Team) ────
+
+function DirectorUpdatesList({ items, onChange, members }) {
+  const update = (idx, key, value) => {
+    const next = [...items]
+    next[idx] = { ...next[idx], [key]: value }
+    onChange(next)
+  }
+  const add = () => onChange([...items, { avenue: '', update: '' }])
+  const remove = (idx) => onChange(items.filter((_, i) => i !== idx))
+
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Director Updates</label>
+      <div className="space-y-3">
+        {items.map((item, idx) => {
+          const director = getAvenueDirector(members, item.avenue)
+          return (
+            <div key={idx} className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-gray-400">#{idx + 1}</span>
+                {items.length > 1 && (
+                  <button onClick={() => remove(idx)} className="text-xs text-red-400 hover:text-red-600 transition-colors">Remove</button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={item.avenue}
+                  onChange={(e) => update(idx, 'avenue', e.target.value)}
+                  className="flex-1 px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors"
+                >
+                  <option value="">Select avenue…</option>
+                  {DIRECTOR_AVENUES.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+                {item.avenue && (
+                  <span className={`text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap ${director ? 'bg-rotary-blue/10 text-rotary-blue' : 'bg-amber-50 text-amber-600'}`}>
+                    {director || 'No director on record'}
+                  </span>
+                )}
+              </div>
+              <input
+                type="text"
+                value={item.update || ''}
+                onChange={(e) => update(idx, 'update', e.target.value)}
+                placeholder="Update"
+                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors"
+              />
+            </div>
+          )
+        })}
+      </div>
+      <button onClick={add} className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-rotary-blue hover:text-rotary-blue/70 transition-colors">
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+        </svg>
+        Add director update
+      </button>
+    </div>
+  )
+}
+
 // ─── Accordion Section (drawer) ────────────────────────────────────────────────
 
 function AccordionSection({ title, defaultOpen = true, children }) {
@@ -215,6 +359,7 @@ function AccordionSection({ title, defaultOpen = true, children }) {
 // ─── Attendees Selector ───────────────────────────────────────────────────────
 
 function AttendeesSelector({ value, onChange, members }) {
+  const [search, setSearch] = useState('')
   const selected = new Set(value ? value.split(',').map(s => s.trim()).filter(Boolean) : [])
   const toggle = (name) => {
     const next = new Set(selected)
@@ -224,11 +369,20 @@ function AttendeesSelector({ value, onChange, members }) {
   const allOn = () => onChange(members.map(m => m.name).join(', '))
   const allOff = () => onChange('')
 
+  const roleRank = (m) => {
+    const r = `${m.role || ''} ${m.role2 || ''}`.toLowerCase()
+    if (r.includes('president') && !r.includes('vice') && !r.includes('past') && !r.includes('ipp')) return 0
+    if (r.includes('secretary')) return 1
+    return 2
+  }
+  const sortedMembers = [...members].sort((a, b) => roleRank(a) - roleRank(b))
+  const filteredMembers = sortedMembers.filter(m => m.name.toLowerCase().includes(search.trim().toLowerCase()))
+
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
-          Attendees ({selected.size} selected)
+          Attendees ({selected.size} selected{members.length > 0 ? ` — ${((selected.size / members.length) * 100).toFixed(0)}%` : ''})
         </label>
         <div className="flex gap-2">
           <button onClick={allOn} className="text-xs text-rotary-blue font-semibold hover:underline">All</button>
@@ -236,26 +390,52 @@ function AttendeesSelector({ value, onChange, members }) {
           <button onClick={allOff} className="text-xs text-gray-400 font-semibold hover:underline">Clear</button>
         </div>
       </div>
+      {members.length > 0 && (
+        <div className="relative mb-2">
+          <svg className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by name..."
+            className="w-full pl-8 pr-3 py-2 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+          />
+        </div>
+      )}
       <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-xl bg-gray-50 divide-y divide-gray-100">
         {members.length === 0 && (
           <p className="text-xs text-gray-400 text-center py-4">No members found. Add members via Our Team page.</p>
         )}
-        {members.map(m => {
+        {members.length > 0 && filteredMembers.length === 0 && (
+          <p className="text-xs text-gray-400 text-center py-4">No members match "{search}".</p>
+        )}
+        {filteredMembers.map((m, i) => {
           const on = selected.has(m.name)
+          const group = roleRank(m) <= 1 ? 'leadership' : 'other'
+          const prevGroup = i > 0 ? (roleRank(filteredMembers[i - 1]) <= 1 ? 'leadership' : 'other') : null
+          const showHeader = group !== prevGroup
           return (
-            <button
-              key={m.id}
-              onClick={() => toggle(m.name)}
-              className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${on ? 'bg-rotary-blue/5' : 'hover:bg-white'}`}
-            >
-              <div className={`w-5 h-5 rounded flex items-center justify-center border-2 flex-shrink-0 transition-colors ${on ? 'bg-rotary-blue border-rotary-blue' : 'border-gray-300'}`}>
-                {on && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold truncate">{m.name}</p>
-                {m.role && <p className="text-[10px] text-gray-400 truncate">{m.role}</p>}
-              </div>
-            </button>
+            <React.Fragment key={m.id}>
+              {showHeader && (
+                <p className="px-3 pt-2 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider bg-gray-50 sticky top-0">
+                  {group === 'leadership' ? 'President & Secretaries' : 'Other Members'}
+                </p>
+              )}
+              <button
+                onClick={() => toggle(m.name)}
+                className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${on ? 'bg-rotary-blue/5' : 'hover:bg-white'}`}
+              >
+                <div className={`w-5 h-5 rounded flex items-center justify-center border-2 flex-shrink-0 transition-colors ${on ? 'bg-rotary-blue border-rotary-blue' : 'border-gray-300'}`}>
+                  {on && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold truncate">{m.name}</p>
+                  {m.role && <p className="text-[10px] text-gray-400 truncate">{m.role}</p>}
+                </div>
+              </button>
+            </React.Fragment>
           )
         })}
       </div>
@@ -364,21 +544,145 @@ function OwnerDropdown({ value, onChange, members }) {
   )
 }
 
+// ─── Multi Owner Dropdown (e.g. Prepared By — more than one person) ──────────
+
+function MultiOwnerDropdown({ value, onChange, members }) {
+  const [search, setSearch] = useState('')
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const selected = value ? value.split(',').map(s => s.trim()).filter(Boolean) : []
+  const filtered = members.filter(m => m.name.toLowerCase().includes(search.toLowerCase()))
+
+  const toggle = (name) => {
+    const next = selected.includes(name) ? selected.filter(n => n !== name) : [...selected, name]
+    onChange(next.join(', '))
+  }
+  const removeChip = (name) => onChange(selected.filter(n => n !== name).join(', '))
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => { setOpen(!open); setSearch('') }}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors text-left min-h-[38px]"
+      >
+        {selected.length > 0 ? (
+          <span className="flex flex-wrap gap-1">
+            {selected.map(name => (
+              <span key={name} className="inline-flex items-center gap-1 pl-1.5 pr-1 py-0.5 rounded-md bg-rotary-blue/10 text-rotary-blue text-xs font-semibold">
+                {name}
+                <span
+                  role="button"
+                  onClick={(e) => { e.stopPropagation(); removeChip(name) }}
+                  className="w-3.5 h-3.5 rounded-full hover:bg-rotary-blue/20 flex items-center justify-center"
+                >
+                  <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                </span>
+              </span>
+            ))}
+          </span>
+        ) : (
+          <span className="text-gray-400">Select preparer(s)…</span>
+        )}
+        <svg className={`w-3.5 h-3.5 text-gray-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.12 }}
+            className="absolute z-50 mt-1 w-full bg-white border border-gray-100 rounded-xl shadow-xl overflow-hidden"
+          >
+            <div className="p-2 border-b border-gray-100">
+              <div className="relative">
+                <svg className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  autoFocus
+                  type="text"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search member…"
+                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue"
+                />
+              </div>
+            </div>
+            <div className="max-h-48 overflow-y-auto">
+              {filtered.length === 0 ? (
+                <p className="px-3 py-3 text-xs text-gray-400 text-center">No members found</p>
+              ) : (
+                filtered.map(m => {
+                  const on = selected.includes(m.name)
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => toggle(m.name)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-rotary-blue/5 transition-colors ${on ? 'bg-rotary-blue/5' : ''}`}
+                    >
+                      <div className={`w-4 h-4 rounded flex items-center justify-center border-2 flex-shrink-0 transition-colors ${on ? 'bg-rotary-blue border-rotary-blue' : 'border-gray-300'}`}>
+                        {on && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                      </div>
+                      <div className="text-left min-w-0">
+                        <p className="font-medium text-rotary-charcoal truncate text-xs">{m.name}</p>
+                        {m.role && <p className="text-[10px] text-gray-400 truncate">{m.role}</p>}
+                      </div>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 // ─── MoM Form Modal ───────────────────────────────────────────────────────────
 
-function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeetings = [] }) {
+function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeetings = [], transactions = [] }) {
   const [form, setForm] = useState(EMPTY_MOM)
   const [saving, setSaving] = useState(false)
   const [customTitle, setCustomTitle] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
-      setForm(initial || EMPTY_MOM)
+      const toBulletList = (v) => Array.isArray(v) && v.length > 0 ? v : (typeof v === 'string' && v ? [{ text: v }] : [{ text: '' }])
+      setForm(initial ? {
+        ...initial,
+        presidentUpdate: toBulletList(initial.presidentUpdate),
+        secretaryUpdate: toBulletList(initial.secretaryUpdate),
+      } : EMPTY_MOM)
       setCustomTitle(false)
     }
   }, [isOpen, initial])
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
+
+  const secretaries = members.filter(m => `${m.role || ''} ${m.role2 || ''}`.toLowerCase().includes('secretary'))
+  const president = members.find(m => {
+    const r = `${m.role || ''} ${m.role2 || ''}`.toLowerCase()
+    return r.includes('president') && !r.includes('vice') && !r.includes('past') && !r.includes('ipp')
+  })
+
+  useEffect(() => {
+    if (isOpen && president) set('approvedBy', president.name)
+  }, [isOpen, president?.name])
+
+  useEffect(() => {
+    if (isOpen) set('totalMembers', String(members.length))
+  }, [isOpen, members.length])
 
   const handleMeetingSelect = (e) => {
     const val = e.target.value
@@ -449,10 +753,10 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
 
             {/* Body */}
             <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
                 {/* Meeting Title — dropdown or readonly */}
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
                     Meeting Title *
                   </label>
@@ -563,13 +867,10 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Total Members</label>
-                  <input
-                    type="number"
-                    value={form.totalMembers}
-                    onChange={e => set('totalMembers', e.target.value)}
-                    placeholder="e.g. 35"
-                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
-                  />
+                  <div className="w-full px-3 py-2.5 text-sm bg-gray-100 border border-gray-200 rounded-xl text-gray-600 font-semibold">
+                    {members.length}
+                    <span className="ml-1.5 text-[10px] text-gray-400 font-normal">from Our Team</span>
+                  </div>
                 </div>
 
                 <div>
@@ -582,13 +883,29 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                 </div>
               </div>
 
+              <DynamicList label="Agenda Items" items={form.agendaItems} onChange={v => set('agendaItems', v)} placeholder="e.g. Review last month's projects" />
+
               <AttendeesSelector
                 value={form.attendees}
                 onChange={v => set('attendees', v)}
                 members={members}
               />
 
-              <DynamicList label="Agenda Items" items={form.agendaItems} onChange={v => set('agendaItems', v)} placeholder="e.g. Review last month's projects" />
+              <DynamicList
+                label="President's Update"
+                items={form.presidentUpdate}
+                onChange={v => set('presidentUpdate', v)}
+                placeholder="e.g. Welcomed new members to the club"
+                bulleted
+              />
+
+              <DynamicList
+                label="Secretary's Update"
+                items={form.secretaryUpdate}
+                onChange={v => set('secretaryUpdate', v)}
+                placeholder="e.g. Meeting minutes from last GBM approved"
+                bulleted
+              />
 
               <MultiFieldList
                 label="Discussion & Decisions"
@@ -621,7 +938,7 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                         placeholder="Describe the task"
                         className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-rotary-blue transition-colors"
                       />
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <OwnerDropdown
                           value={item.owner}
                           members={members}
@@ -667,33 +984,50 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                 </button>
               </div>
 
-              <MultiFieldList
-                label="Director Updates"
+              <DirectorUpdatesList
                 items={form.directorUpdates}
                 onChange={v => set('directorUpdates', v)}
-                fields={['avenue', 'update']}
-                addRow={{ avenue: '', update: '' }}
-                placeholder={{ avenue: 'Avenue (e.g. Community Service)', update: 'Update' }}
+                members={members}
               />
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Income (₹)</label>
-                  <input
-                    type="number"
-                    value={form.financials?.income || ''}
-                    onChange={e => set('financials', { ...form.financials, income: e.target.value })}
-                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
-                  />
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Financial Updates</label>
+                  {form.meetingDate && (
+                    <button
+                      type="button"
+                      onClick={() => set('financials', getMonthFinancials(transactions, form.meetingDate))}
+                      className="flex items-center gap-1.5 text-xs font-semibold text-rotary-blue hover:text-rotary-blue/70 transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Fetch from Treasurer Report
+                    </button>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Expense (₹)</label>
-                  <input
-                    type="number"
-                    value={form.financials?.expense || ''}
-                    onChange={e => set('financials', { ...form.financials, expense: e.target.value })}
-                    className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
-                  />
+                <p className="text-[10px] text-gray-400 mb-2">
+                  {form.meetingDate ? `Pulls ${new Date(form.meetingDate).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })} totals from Treasurer Dashboard — you can still edit below.` : 'Set the meeting date to fetch totals from Treasurer Dashboard.'}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Income (₹)</label>
+                    <input
+                      type="number"
+                      value={form.financials?.income || ''}
+                      onChange={e => set('financials', { ...form.financials, income: e.target.value })}
+                      className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Expense (₹)</label>
+                    <input
+                      type="number"
+                      value={form.financials?.expense || ''}
+                      onChange={e => set('financials', { ...form.financials, expense: e.target.value })}
+                      className="w-full px-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-rotary-blue focus:bg-white transition-colors"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -710,7 +1044,7 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
 
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Next Meeting</label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input
                     type="text"
                     value={form.nextMeetingTitle}
@@ -749,18 +1083,32 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
                 placeholder={{ name: 'File name', url: 'Link (Drive/URL)' }}
               />
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Prepared By</label>
-                  <OwnerDropdown value={form.preparedBy} members={members} onChange={v => set('preparedBy', v)} />
+                  <MultiOwnerDropdown value={form.preparedBy} members={secretaries} onChange={v => set('preparedBy', v)} />
+                  {secretaries.length === 0 && <p className="text-[10px] text-amber-500 mt-1">No member with role "Secretary" found in Our Team.</p>}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Reviewed By</label>
-                  <OwnerDropdown value={form.reviewedBy} members={members} onChange={v => set('reviewedBy', v)} />
+                  <OwnerDropdown value={form.reviewedBy} members={secretaries} onChange={v => set('reviewedBy', v)} />
+                  {secretaries.length === 0 && <p className="text-[10px] text-amber-500 mt-1">No member with role "Secretary" found in Our Team.</p>}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Approved By</label>
-                  <OwnerDropdown value={form.approvedBy} members={members} onChange={v => set('approvedBy', v)} />
+                  <div className="w-full flex items-center gap-2 px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg text-rotary-charcoal">
+                    {president ? (
+                      <>
+                        <span className="w-5 h-5 rounded-full bg-rotary-blue text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                          {president.name[0].toUpperCase()}
+                        </span>
+                        <span className="truncate">{president.name}</span>
+                      </>
+                    ) : (
+                      <span className="text-gray-400">No President on record</span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-1">Auto-set to the club President — set in Our Team.</p>
                 </div>
               </div>
             </div>
@@ -795,8 +1143,9 @@ function MomModal({ isOpen, onClose, onSave, initial, members, attendanceMeeting
 
 // ─── PDF Export ───────────────────────────────────────────────────────────────
 
-const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-function exportMomToPdf(mom) {
+// ─── Plain-Text Summary (for pasting into an email / message manually) ───────
+
+function buildMomSummary(mom, members = []) {
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'
   const fmtTime = (t) => {
     if (!t) return ''
@@ -810,6 +1159,91 @@ function exportMomToPdf(mom) {
   const total = parseInt(mom.totalMembers, 10) || 0
   const pct = total > 0 ? ((attendees.length / total) * 100).toFixed(1) : null
   const agenda = (mom.agendaItems || []).filter(a => a.text)
+  const presidentUpdates = getBulletPoints(mom.presidentUpdate)
+  const secretaryUpdates = getBulletPoints(mom.secretaryUpdate)
+  const discussions = (mom.discussionItems || []).filter(d => d.agendaItem || d.discussion || d.decision)
+  const actions = (mom.actionItems || []).filter(a => a.task)
+  const directorUpdates = (mom.directorUpdates || []).filter(d => d.avenue || d.update)
+  const income = parseFloat(mom.financials?.income) || 0
+  const expense = parseFloat(mom.financials?.expense) || 0
+  const hasFinancials = mom.financials?.income || mom.financials?.expense
+
+  const lines = []
+  lines.push(`MINUTES OF MEETING — ${mom.meetingTitle || 'Untitled Meeting'}`)
+  lines.push(`Rotaract Club of Bengaluru BTM · RID 3191`)
+  lines.push('')
+  lines.push(`${mom.meetingType || ''} · ${fmtDate(mom.meetingDate)}${mom.startTime ? ` · ${fmtTime(mom.startTime)}${mom.endTime ? ' – ' + fmtTime(mom.endTime) : ''}` : ''}`)
+  if (mom.venue) lines.push(`Venue: ${mom.venue}`)
+  if (mom.chairedBy || mom.recordedBy) lines.push(`Chaired By: ${mom.chairedBy || '—'}   Recorded By: ${mom.recordedBy || '—'}`)
+  lines.push(`Attendance: ${total > 0 ? `${attendees.length} / ${total} (${pct}%)` : attendees.length}`)
+
+  if (attendees.length > 0) {
+    lines.push('', `ATTENDEES (${attendees.length})`, attendees.join(', '))
+  }
+
+  if (agenda.length > 0) {
+    lines.push('', 'AGENDA')
+    agenda.forEach((a, i) => lines.push(`${i + 1}. ${a.text}`))
+  }
+
+  if (presidentUpdates.length > 0) lines.push('', "PRESIDENT'S UPDATE", ...presidentUpdates.map(p => `- ${p}`))
+  if (secretaryUpdates.length > 0) lines.push('', "SECRETARY'S UPDATE", ...secretaryUpdates.map(p => `- ${p}`))
+
+  if (discussions.length > 0) {
+    lines.push('', 'DISCUSSION & DECISIONS')
+    discussions.forEach(d => lines.push(`- ${d.agendaItem || 'General'}: ${d.discussion || '—'} → Decision: ${d.decision || 'TBD'}`))
+  }
+
+  if (actions.length > 0) {
+    lines.push('', 'ACTION ITEMS')
+    actions.forEach(a => lines.push(`- [${a.status === 'Done' ? 'x' : ' '}] ${a.task} — Owner: ${a.owner || 'Unassigned'}, Due: ${a.deadline ? fmtDate(a.deadline) : 'TBD'}, Priority: ${a.priority || 'Medium'}, Status: ${a.status || 'Pending'}`))
+  }
+
+  if (directorUpdates.length > 0) {
+    lines.push('', 'DIRECTOR UPDATES')
+    directorUpdates.forEach(d => {
+      const director = getAvenueDirector(members, d.avenue)
+      lines.push(`- ${d.avenue || 'Update'}${director ? ` (${director})` : ''}: ${d.update || '—'}`)
+    })
+  }
+
+  if (hasFinancials) {
+    lines.push('', 'FINANCIAL UPDATES', `Income: ₹${income.toLocaleString('en-IN')}   Expense: ₹${expense.toLocaleString('en-IN')}   Balance: ₹${(income - expense).toLocaleString('en-IN')}`)
+  }
+
+  if (mom.announcements) {
+    lines.push('', 'ANNOUNCEMENTS', mom.announcements)
+  }
+
+  if (mom.nextMeetingTitle || mom.nextMeetingDate) {
+    lines.push('', 'NEXT MEETING', `${mom.nextMeetingTitle || ''}${mom.nextMeetingDate ? ` — ${fmtDate(mom.nextMeetingDate)}` : ''}${mom.nextMeetingTime ? ` ${fmtTime(mom.nextMeetingTime)}` : ''}${mom.nextMeetingVenue ? ` at ${mom.nextMeetingVenue}` : ''}`)
+  }
+
+  lines.push('', 'APPROVAL')
+  lines.push(`Prepared By: ${mom.preparedBy || '—'}`)
+  lines.push(`Reviewed By: ${mom.reviewedBy || '—'}`)
+  lines.push(`Approved By: ${mom.approvedBy || '—'}`)
+
+  return lines.join('\n')
+}
+
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+function exportMomToPdf(mom, members = []) {
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'
+  const fmtTime = (t) => {
+    if (!t) return ''
+    const [h, m] = t.split(':')
+    const hour = parseInt(h, 10)
+    const ampm = hour >= 12 ? 'PM' : 'AM'
+    const h12 = hour % 12 === 0 ? 12 : hour % 12
+    return `${h12}:${m} ${ampm}`
+  }
+  const attendees = mom.attendees ? mom.attendees.split(',').map(s => s.trim()).filter(Boolean) : []
+  const total = parseInt(mom.totalMembers, 10) || 0
+  const pct = total > 0 ? ((attendees.length / total) * 100).toFixed(1) : null
+  const agenda = (mom.agendaItems || []).filter(a => a.text)
+  const presidentUpdates = getBulletPoints(mom.presidentUpdate)
+  const secretaryUpdates = getBulletPoints(mom.secretaryUpdate)
   const discussions = (mom.discussionItems || []).filter(d => d.agendaItem || d.discussion || d.decision)
   const actions = (mom.actionItems || []).filter(a => a.task)
   const directorUpdates = (mom.directorUpdates || []).filter(d => d.avenue || d.update)
@@ -818,104 +1252,170 @@ function exportMomToPdf(mom) {
   const expense = parseFloat(mom.financials?.expense) || 0
   const hasFinancials = mom.financials?.income || mom.financials?.expense
 
-  const statusBg = { 'Pending': '#fef3c7', 'In Progress': '#dbeafe', 'Done': '#dcfce7' }
-  const statusFg = { 'Pending': '#92400e', 'In Progress': '#1d4ed8', 'Done': '#15803d' }
-  const priorityBg = { 'Low': '#f3f4f6', 'Medium': '#dbeafe', 'High': '#fee2e2' }
-  const priorityFg = { 'Low': '#4b5563', 'Medium': '#1d4ed8', 'High': '#b91c1c' }
+  const statusTagClass = { 'Pending': 'pending', 'In Progress': 'progress', 'Done': 'done' }
 
   const infoRows = [
-    ['Meeting Number', mom.meetingNumber || '—'],
-    ['Meeting Type', mom.meetingType || '—'],
-    ['Date', fmtDate(mom.meetingDate)],
-    ['Time', mom.startTime ? `${fmtTime(mom.startTime)}${mom.endTime ? ' – ' + fmtTime(mom.endTime) : ''}` : '—'],
-    ['Venue', mom.venue || '—'],
-    ['Chaired By', mom.chairedBy || '—'],
-    ['Recorded By', mom.recordedBy || '—'],
-    ['Attendance', total > 0 ? `${attendees.length} / ${total} (${pct}%)` : `${attendees.length}`],
+    ['Meeting Type', mom.meetingType || '—', 'Venue', mom.venue || '—'],
+    ['Chaired By', mom.chairedBy || '—', 'Recorded By', mom.recordedBy || '—'],
+    ['Meeting Number', mom.meetingNumber || '—', 'Time', mom.startTime ? `${fmtTime(mom.startTime)}${mom.endTime ? ' – ' + fmtTime(mom.endTime) : ''}` : '—'],
+    ['Attendance', total > 0 ? `${attendees.length} / ${total} (${pct}%)` : `${attendees.length}`, '', ''],
   ]
+
+  const now = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+  const rotaryYearStart = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1
+  const themeUrl = `${window.location.origin}/theme-create-lasting-impact.png`
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>MoM - ${esc(mom.meetingTitle)}</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e2837; padding: 40px; max-width: 900px; margin: 0 auto; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #d41367; padding-bottom: 20px; margin-bottom: 28px; }
-  .header h1 { font-size: 20px; color: #d41367; margin: 0 0 4px; }
-  .header p { font-size: 12px; color: #666; }
-  .meeting-title { font-size: 26px; font-weight: 700; color: #1e2837; margin-bottom: 8px; }
-  .meta { display: flex; gap: 20px; font-size: 12px; color: #666; margin-bottom: 28px; flex-wrap: wrap; }
-  .section { margin-bottom: 24px; }
-  .section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #d41367; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #f0e0e8; }
-  .attendees { display: flex; flex-wrap: wrap; gap: 8px; }
-  .attendee { background: #f8f9fa; border: 1px solid #e8ecf0; border-radius: 20px; padding: 4px 12px; font-size: 12px; }
-  .list-item { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; font-size: 13px; }
-  .badge { width: 22px; height: 22px; border-radius: 50%; color: white; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { background: #1e2837; color: white; padding: 10px 12px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
-  tr:nth-child(even) { background: #fafafa; }
-  .info-table td:first-child { font-weight: 600; color: #666; width: 180px; }
-  .status { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
-  .financials { display: flex; gap: 16px; }
-  .fin-card { flex: 1; background: #f8f9fa; border: 1px solid #e8ecf0; border-radius: 10px; padding: 12px 16px; }
-  .fin-card .label { font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 4px; }
-  .fin-card .value { font-size: 18px; font-weight: 700; }
-  .footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid #eee; font-size: 10px; color: #aaa; text-align: center; }
-  @media print { body { padding: 20px; } }
+  @page{size:A4;margin:18mm 12mm}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  html,body{background:#e9e9ec}
+  body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;font-size:12.5px;line-height:1.55;padding:18px}
+  .sheet{max-width:800px;margin:0 auto;background:#fff}
+
+  .letterhead{border-bottom:3px solid #d4006d;padding:26px 40px 18px;display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
+  .letterhead-left{display:flex;align-items:center;gap:16px}
+  .logo-chip{width:54px;height:54px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .logo-chip img{width:100%;height:100%;object-fit:contain}
+  .org-name{font-size:18px;font-weight:700;letter-spacing:.2px;font-family:'Times New Roman',Georgia,serif}
+  .org-sub{font-size:11px;color:#555;margin-top:2px;font-family:Arial,sans-serif}
+  .org-year{font-size:10px;color:#d4006d;font-weight:700;margin-top:4px;font-family:Arial,sans-serif;letter-spacing:.3px}
+  .doc-meta{text-align:right;font-size:10px;color:#666;font-family:Arial,sans-serif;line-height:1.7}
+  .doc-meta b{color:#1a1a1a}
+
+  .body-pad{padding:30px 40px 34px}
+
+  .doc-title{text-align:center;margin-bottom:4px}
+  .doc-title .eyebrow{font-family:Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:#d4006d}
+  .doc-title h1{font-size:20px;font-weight:700;margin-top:4px}
+
+  .meta-line{text-align:center;font-family:Arial,sans-serif;font-size:11px;color:#555;margin:8px 0 26px;padding-bottom:14px;border-bottom:1px solid #f3d3e3}
+  .meta-line span:not(:last-child)::after{content:'  •  ';color:#e8a9c6}
+
+  .section{margin-bottom:22px;break-inside:avoid}
+  .section-title{font-family:Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#d4006d;padding-bottom:6px;border-bottom:1.5px solid #d4006d;margin-bottom:12px}
+
+  table.info{width:100%;border-collapse:collapse;font-family:Arial,sans-serif}
+  table.info td{padding:6px 0;vertical-align:top;font-size:12px}
+  table.info td.k{width:22%;color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.4px;padding-right:10px}
+  table.info td.v{font-weight:600;color:#1a1a1a;width:28%}
+
+  .attendee-box{border:1px solid #f3d3e3;padding:12px 16px}
+  .attendee-grid{columns:3;column-gap:24px;font-family:Arial,sans-serif;font-size:11.5px;color:#333}
+  .attendee-grid div{break-inside:avoid;padding:2px 0}
+  .attendee-grid .n{color:#999;font-size:10px;margin-right:6px}
+
+  ol.agenda{font-family:Arial,sans-serif;padding-left:22px}
+  ol.agenda li{margin-bottom:6px;font-size:12px}
+
+  table.grid{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:11.5px}
+  table.grid th{text-align:left;background:#d4006d;color:#fff;font-weight:700;text-transform:uppercase;font-size:9.5px;letter-spacing:.5px;padding:8px 10px;border:1px solid #d4006d}
+  table.grid td{padding:8px 10px;border:1px solid #f3d3e3;vertical-align:top}
+  table.grid tbody tr:nth-child(even){background:#fdf5f9}
+
+  .status-tag{font-family:Arial,sans-serif;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border:1px solid #999;color:#444}
+  .status-tag.done{border-color:#2f6f3e;color:#2f6f3e}
+  .status-tag.progress{border-color:#1f4e8c;color:#1f4e8c}
+  .status-tag.pending{border-color:#8a6d1a;color:#8a6d1a}
+
+  .fin-table{width:60%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px}
+  .fin-table td{padding:7px 12px;border:1px solid #f3d3e3}
+  .fin-table td.label{color:#555}
+  .fin-table td.amt{text-align:right;font-weight:700;font-family:Georgia,serif}
+  .fin-table tr.total td{border-top:2px solid #d4006d;font-weight:700}
+
+  .announce-text{font-family:Arial,sans-serif;font-size:12px;color:#333;line-height:1.7}
+
+  .attach-list{font-family:Arial,sans-serif;font-size:12px;color:#333}
+  .attach-list div{padding:3px 0}
+
+  table.approval{width:100%;border-collapse:collapse;font-family:Arial,sans-serif}
+  table.approval td{padding:8px 0;vertical-align:top;font-size:12px;border-bottom:1px solid #f6e0ea}
+  table.approval tr:last-child td{border-bottom:none}
+  table.approval td.k{width:30%;color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+  table.approval td.v{font-weight:700;color:#1a1a1a;font-family:Georgia,serif}
+
+  .ftr{margin-top:34px;padding-top:12px;border-top:1px solid #f3d3e3;display:flex;justify-content:space-between;font-family:Arial,sans-serif;font-size:9px;color:#888}
 </style></head><body>
-  <div class="header">
-    <div><h1>Rotaract Bengaluru BTM</h1><p>Minutes of Meeting</p></div>
-    <div style="text-align:right;font-size:11px;color:#888">
-      <p>Generated: ${fmtDate(new Date().toISOString().split('T')[0])}</p>
-      ${mom.nextMeetingDate ? `<p>Next meeting: ${fmtDate(mom.nextMeetingDate)}</p>` : ''}
+<div class="sheet">
+
+<div class="letterhead">
+  <div class="letterhead-left">
+    <div class="logo-chip"><img src="${themeUrl}" onerror="this.parentElement.style.display='none'" /></div>
+    <div>
+      <div class="org-name">Rotaract Club of Bengaluru BTM</div>
+      <div class="org-sub">Rotary International District 3191 · RI Club ID 8826232</div>
+      <div class="org-year">ROTARY YEAR ${rotaryYearStart}–${rotaryYearStart + 1}</div>
     </div>
   </div>
-  <div class="meeting-title">${esc(mom.meetingTitle)}</div>
-  <div class="meta">
-    <span>📅 ${fmtDate(mom.meetingDate)}</span>
-    ${attendees.length > 0 ? `<span>👥 ${attendees.length} attendee${attendees.length !== 1 ? 's' : ''}</span>` : ''}
-    ${actions.length > 0 ? `<span>✅ ${actions.length} action item${actions.length !== 1 ? 's' : ''}</span>` : ''}
+  <div class="doc-meta">
+    <div>Document generated</div>
+    <div><b>${now}</b></div>
   </div>
+</div>
 
-  <div class="section"><div class="section-title">Meeting Information</div>
-    <table class="info-table">${infoRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
-  </div>
+<div class="body-pad">
 
-  ${attendees.length > 0 ? `<div class="section"><div class="section-title">Attendees</div><div class="attendees">${attendees.map(a => `<span class="attendee">${esc(a)}</span>`).join('')}</div></div>` : ''}
+<div class="doc-title">
+  <div class="eyebrow">Minutes of Meeting</div>
+  <h1>${esc(mom.meetingTitle)}</h1>
+</div>
+<div class="meta-line">
+  <span>${fmtDate(mom.meetingDate)}</span>
+  ${mom.startTime ? `<span>${fmtTime(mom.startTime)}${mom.endTime ? ' – ' + fmtTime(mom.endTime) : ''}</span>` : ''}
+  <span>${actions.length} Action Item${actions.length !== 1 ? 's' : ''} Recorded</span>
+</div>
 
-  ${agenda.length > 0 ? `<div class="section"><div class="section-title">Agenda</div>${agenda.map((a, i) => `<div class="list-item"><span class="badge" style="background:#d41367">${i + 1}</span><span>${esc(a.text)}</span></div>`).join('')}</div>` : ''}
+<div class="section">
+  <div class="section-title">Meeting Information</div>
+  <table class="info">${infoRows.map(([k1, v1, k2, v2]) => `<tr><td class="k">${esc(k1)}</td><td class="v">${esc(v1)}</td><td class="k">${esc(k2)}</td><td class="v">${esc(v2)}</td></tr>`).join('')}</table>
+</div>
 
-  ${discussions.length > 0 ? `<div class="section"><div class="section-title">Discussion &amp; Decisions</div><table><thead><tr><th>Agenda Item</th><th>Discussion Summary</th><th>Decision Taken</th></tr></thead><tbody>${discussions.map(d => `<tr><td>${esc(d.agendaItem || '—')}</td><td>${esc(d.discussion || '—')}</td><td>${esc(d.decision || '—')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+<div class="section"><div class="section-title">Attendees (${attendees.length}${total > 0 ? ` / ${total} — ${pct}%` : ''})</div><div class="attendee-box">${attendees.length > 0 ? `<div class="attendee-grid">${attendees.map((a, i) => `<div><span class="n">${String(i + 1).padStart(2, '0')}</span>${esc(a)}</div>`).join('')}</div>` : `<p style="font-family:Arial,sans-serif;font-size:11.5px;color:#999">No attendees recorded for this meeting.</p>`}</div></div>
 
-  ${actions.length > 0 ? `<div class="section"><div class="section-title">Action Items</div><table><thead><tr><th>Task</th><th>Owner</th><th>Deadline</th><th>Priority</th><th>Status</th></tr></thead><tbody>${actions.map(a => `<tr><td>${esc(a.task)}</td><td>${esc(a.owner || '—')}</td><td>${a.deadline ? fmtDate(a.deadline) : '—'}</td><td><span class="status" style="background:${priorityBg[a.priority || 'Medium']};color:${priorityFg[a.priority || 'Medium']}">${esc(a.priority || 'Medium')}</span></td><td><span class="status" style="background:${statusBg[a.status || 'Pending']};color:${statusFg[a.status || 'Pending']}">${esc(a.status || 'Pending')}</span></td></tr>`).join('')}</tbody></table></div>` : ''}
+${agenda.length > 0 ? `<div class="section"><div class="section-title">Agenda</div><ol class="agenda">${agenda.map(a => `<li>${esc(a.text)}</li>`).join('')}</ol></div>` : ''}
+${presidentUpdates.length > 0 ? `<div class="section"><div class="section-title">President's Update</div><ol class="agenda" style="list-style:disc">${presidentUpdates.map(p => `<li>${esc(p)}</li>`).join('')}</ol></div>` : ''}
+${secretaryUpdates.length > 0 ? `<div class="section"><div class="section-title">Secretary's Update</div><ol class="agenda" style="list-style:disc">${secretaryUpdates.map(p => `<li>${esc(p)}</li>`).join('')}</ol></div>` : ''}
 
-  ${directorUpdates.length > 0 ? `<div class="section"><div class="section-title">Director Updates</div><table><thead><tr><th>Avenue</th><th>Update</th></tr></thead><tbody>${directorUpdates.map(d => `<tr><td>${esc(d.avenue || '—')}</td><td>${esc(d.update || '—')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+${discussions.length > 0 ? `<div class="section"><div class="section-title">Discussion &amp; Decisions</div><table class="grid"><thead><tr><th style="width:20%">Agenda Item</th><th style="width:42%">Discussion Summary</th><th>Decision Taken</th></tr></thead><tbody>${discussions.map(d => `<tr><td>${esc(d.agendaItem || '—')}</td><td>${esc(d.discussion || '—')}</td><td>${esc(d.decision || '—')}</td></tr>`).join('')}</tbody></table></div>` : ''}
 
-  ${hasFinancials ? `<div class="section"><div class="section-title">Financial Updates</div><div class="financials">
-    <div class="fin-card"><div class="label">Income</div><div class="value" style="color:#15803d">₹${income.toLocaleString('en-IN')}</div></div>
-    <div class="fin-card"><div class="label">Expense</div><div class="value" style="color:#b91c1c">₹${expense.toLocaleString('en-IN')}</div></div>
-    <div class="fin-card"><div class="label">Balance</div><div class="value" style="color:#1e2837">₹${(income - expense).toLocaleString('en-IN')}</div></div>
-  </div></div>` : ''}
+${actions.length > 0 ? `<div class="section"><div class="section-title">Action Items</div><table class="grid"><thead><tr><th>Task</th><th>Owner</th><th>Deadline</th><th>Priority</th><th>Status</th></tr></thead><tbody>${actions.map(a => `<tr><td>${esc(a.task)}</td><td>${esc(a.owner || '—')}</td><td>${a.deadline ? fmtDate(a.deadline) : '—'}</td><td>${esc(a.priority || 'Medium')}</td><td><span class="status-tag ${statusTagClass[a.status || 'Pending']}">${esc(a.status || 'Pending')}</span></td></tr>`).join('')}</tbody></table></div>` : ''}
 
-  ${mom.announcements ? `<div class="section"><div class="section-title">Announcements</div><p style="font-size:13px;line-height:1.6">${esc(mom.announcements)}</p></div>` : ''}
+${directorUpdates.length > 0 ? `<div class="section"><div class="section-title">Director Updates</div><table class="grid"><thead><tr><th style="width:28%">Avenue</th><th style="width:28%">Director</th><th>Update</th></tr></thead><tbody>${directorUpdates.map(d => `<tr><td>${esc(d.avenue || '—')}</td><td>${esc(getAvenueDirector(members, d.avenue) || '—')}</td><td>${esc(d.update || '—')}</td></tr>`).join('')}</tbody></table></div>` : ''}
 
-  ${(mom.nextMeetingTitle || mom.nextMeetingDate) ? `<div class="section"><div class="section-title">Next Meeting</div>
-    <table class="info-table">
-      ${mom.nextMeetingTitle ? `<tr><td>Meeting</td><td>${esc(mom.nextMeetingTitle)}</td></tr>` : ''}
-      ${mom.nextMeetingDate ? `<tr><td>Date</td><td>${fmtDate(mom.nextMeetingDate)}</td></tr>` : ''}
-      ${mom.nextMeetingTime ? `<tr><td>Time</td><td>${fmtTime(mom.nextMeetingTime)}</td></tr>` : ''}
-      ${mom.nextMeetingVenue ? `<tr><td>Venue</td><td>${esc(mom.nextMeetingVenue)}</td></tr>` : ''}
-    </table>
-  </div>` : ''}
+${hasFinancials ? `<div class="section"><div class="section-title">Financial Updates</div><table class="fin-table">
+  <tr><td class="label">Income</td><td class="amt">₹${income.toLocaleString('en-IN')}</td></tr>
+  <tr><td class="label">Expense</td><td class="amt">₹${expense.toLocaleString('en-IN')}</td></tr>
+  <tr class="total"><td class="label">Balance</td><td class="amt">₹${(income - expense).toLocaleString('en-IN')}</td></tr>
+</table></div>` : ''}
 
-  ${attachments.length > 0 ? `<div class="section"><div class="section-title">Attachments</div>${attachments.map(a => `<div class="list-item"><span class="badge" style="background:#6b7280">📎</span><span>${esc(a.name || a.url)}</span></div>`).join('')}</div>` : ''}
+${mom.announcements ? `<div class="section"><div class="section-title">Announcements</div><p class="announce-text">${esc(mom.announcements)}</p></div>` : ''}
 
-  ${(mom.preparedBy || mom.reviewedBy || mom.approvedBy) ? `<div class="section"><div class="section-title">Approval</div>
-    <table><thead><tr><th>Prepared By</th><th>Reviewed By</th><th>Approved By</th></tr></thead>
-    <tbody><tr><td>${esc(mom.preparedBy || '—')}</td><td>${esc(mom.reviewedBy || '—')}</td><td>${esc(mom.approvedBy || '—')}</td></tr></tbody></table>
-  </div>` : ''}
+${(mom.nextMeetingTitle || mom.nextMeetingDate) ? `<div class="section"><div class="section-title">Next Meeting</div>
+  <table class="info"><tr>
+    <td class="k">Meeting</td><td class="v">${esc(mom.nextMeetingTitle || '—')}</td>
+    <td class="k">Date</td><td class="v">${mom.nextMeetingDate ? fmtDate(mom.nextMeetingDate) : '—'}</td>
+  </tr><tr>
+    <td class="k">Time</td><td class="v">${mom.nextMeetingTime ? fmtTime(mom.nextMeetingTime) : '—'}</td>
+    <td class="k">Venue</td><td class="v">${esc(mom.nextMeetingVenue || '—')}</td>
+  </tr></table>
+</div>` : ''}
 
-  <div class="footer">Rotaract Club of Bengaluru BTM · RID 3190 · Create. Lead. Inspire.</div>
+${attachments.length > 0 ? `<div class="section"><div class="section-title">Attachments</div><div class="attach-list">${attachments.map(a => `<div>${esc(a.name || a.url)}</div>`).join('')}</div></div>` : ''}
+
+<div class="section">
+  <div class="section-title">Approval</div>
+  <table class="approval">
+    <tr><td class="k">Prepared By</td><td class="v">${esc(mom.preparedBy) || '—'}</td></tr>
+    <tr><td class="k">Reviewed By</td><td class="v">${esc(mom.reviewedBy) || '—'}</td></tr>
+    <tr><td class="k">Approved By (President)</td><td class="v">${esc(mom.approvedBy) || '—'}</td></tr>
+  </table>
+</div>
+
+<div class="ftr"><span>Rotaract Club of Bengaluru BTM · RID 3190</span><span>Confidential — For Club Use Only</span></div>
+</div>
+</div>
 </body></html>`
 
   const printWindow = window.open('', '_blank')
@@ -926,13 +1426,22 @@ function exportMomToPdf(mom) {
 
 // ─── MoM Detail Drawer ────────────────────────────────────────────────────────
 
-function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
+function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange, members = [] }) {
+  const [copied, setCopied] = useState(false)
   if (!mom) return null
+
+  const handleCopySummary = async () => {
+    await navigator.clipboard.writeText(buildMomSummary(mom, members))
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
   const attendeeList = mom.attendees ? mom.attendees.split(',').map(s => s.trim()).filter(Boolean) : []
   const total = parseInt(mom.totalMembers, 10) || 0
   const pct = total > 0 ? ((attendeeList.length / total) * 100).toFixed(1) : null
   const discussionList = (mom.discussionItems || []).filter(d => d.agendaItem || d.discussion || d.decision)
   const directorUpdateList = (mom.directorUpdates || []).filter(d => d.avenue || d.update)
+  const presidentUpdateList = getBulletPoints(mom.presidentUpdate)
+  const secretaryUpdateList = getBulletPoints(mom.secretaryUpdate)
   const attachmentList = (mom.attachments || []).filter(a => a.name || a.url)
   const income = parseFloat(mom.financials?.income) || 0
   const expense = parseFloat(mom.financials?.expense) || 0
@@ -993,7 +1502,18 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <button onClick={() => exportMomToPdf(mom)} className="p-2 rounded-xl bg-gray-100 hover:bg-rotary-blue/10 hover:text-rotary-blue transition-colors" title="Export PDF">
+                  <button onClick={handleCopySummary} className="p-2 rounded-xl bg-gray-100 hover:bg-rotary-blue/10 hover:text-rotary-blue transition-colors" title="Copy summary (for email/message)">
+                    {copied ? (
+                      <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    )}
+                  </button>
+                  <button onClick={() => exportMomToPdf(mom, members)} className="p-2 rounded-xl bg-gray-100 hover:bg-rotary-blue/10 hover:text-rotary-blue transition-colors" title="Export PDF">
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
@@ -1059,6 +1579,32 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
                 </AccordionSection>
               )}
 
+              {presidentUpdateList.length > 0 && (
+                <AccordionSection title="President's Update">
+                  <ul className="space-y-1.5">
+                    {presidentUpdateList.map((p, i) => (
+                      <li key={i} className="flex items-start gap-2.5 text-sm text-gray-700">
+                        <span className="w-5 h-5 flex items-center justify-center flex-shrink-0 text-rotary-blue text-lg leading-none">•</span>
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </AccordionSection>
+              )}
+
+              {secretaryUpdateList.length > 0 && (
+                <AccordionSection title="Secretary's Update">
+                  <ul className="space-y-1.5">
+                    {secretaryUpdateList.map((p, i) => (
+                      <li key={i} className="flex items-start gap-2.5 text-sm text-gray-700">
+                        <span className="w-5 h-5 flex items-center justify-center flex-shrink-0 text-rotary-blue text-lg leading-none">•</span>
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </AccordionSection>
+              )}
+
               {discussionList.length > 0 && (
                 <AccordionSection title="Discussion & Decisions">
                   <div className="overflow-x-auto -mx-1">
@@ -1112,6 +1658,7 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
                             </span>
                           )}
                         </div>
+                        <StatusHistoryLog history={getStatusHistory(item)} />
                       </div>
                     ))}
                   </div>
@@ -1121,12 +1668,22 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
               {directorUpdateList.length > 0 && (
                 <AccordionSection title="Director Reports">
                   <div className="space-y-2">
-                    {directorUpdateList.map((d, i) => (
-                      <div key={i} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                        <p className="text-xs font-semibold text-rotary-blue mb-1">{d.avenue || 'Update'}</p>
-                        <p className="text-sm text-gray-700">{d.update}</p>
-                      </div>
-                    ))}
+                    {directorUpdateList.map((d, i) => {
+                      const director = getAvenueDirector(members, d.avenue)
+                      return (
+                        <div key={i} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <p className="text-xs font-semibold text-rotary-blue">{d.avenue || 'Update'}</p>
+                            {d.avenue && (
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${director ? 'bg-rotary-blue/10 text-rotary-blue' : 'bg-amber-50 text-amber-600'}`}>
+                                {director || 'No director on record'}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-700">{d.update}</p>
+                        </div>
+                      )
+                    })}
                   </div>
                 </AccordionSection>
               )}
@@ -1215,18 +1772,100 @@ function MomDrawer({ mom, onClose, onEdit, onDelete, onStatusChange }) {
   )
 }
 
+// ─── Action Items Table (all tasks across every MoM, tracked in one place) ────
+
+function ActionItemsTable({ moms, onOpenMom, onStatusChange, readOnly }) {
+  const [statusFilter, setStatusFilter] = useState('All')
+
+  const rows = moms
+    .flatMap(mom => (mom.actionItems || [])
+      .map((item, idx) => ({ mom, idx, item }))
+      .filter(r => r.item.task))
+    .filter(r => statusFilter === 'All' || (r.item.status || 'Pending') === statusFilter)
+    .sort((a, b) => {
+      if (!a.item.deadline) return 1
+      if (!b.item.deadline) return -1
+      return new Date(a.item.deadline) - new Date(b.item.deadline)
+    })
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        {['All', 'Pending', 'In Progress', 'Done'].map(s => (
+          <button
+            key={s}
+            onClick={() => setStatusFilter(s)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${statusFilter === s ? 'bg-rotary-blue text-white border-rotary-blue' : 'bg-white text-gray-500 border-gray-200 hover:border-rotary-blue/40'}`}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center bg-white rounded-2xl border border-gray-100">
+          <p className="font-semibold text-gray-400">No action items {statusFilter !== 'All' ? `with status "${statusFilter}"` : 'yet'}</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider text-left border-b border-gray-100">
+                  <th className="px-4 py-3">Task</th>
+                  <th className="px-4 py-3">Meeting</th>
+                  <th className="px-4 py-3">Owner</th>
+                  <th className="px-4 py-3">Deadline</th>
+                  <th className="px-4 py-3">Priority</th>
+                  <th className="px-4 py-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {rows.map(({ mom, idx, item }) => (
+                  <tr key={`${mom.id}-${idx}`} className="align-top hover:bg-gray-50/60 transition-colors">
+                    <td className="px-4 py-3 font-medium text-gray-800 max-w-xs">{item.task}</td>
+                    <td className="px-4 py-3">
+                      <button onClick={() => onOpenMom(mom)} className="text-rotary-blue font-semibold hover:underline text-left">
+                        {mom.meetingTitle}
+                      </button>
+                      <p className="text-xs text-gray-400 mt-0.5">{formatDate(mom.meetingDate)}</p>
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{item.owner || '—'}</td>
+                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{item.deadline ? formatDate(item.deadline) : '—'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold border ${PRIORITY_COLORS[item.priority] || PRIORITY_COLORS.Medium}`}>
+                        {item.priority || 'Medium'}
+                      </span>
+                    </td>
+                    <td className={`px-4 py-3 max-w-[220px] ${readOnly ? 'pointer-events-none opacity-60' : ''}`}>
+                      <StatusBadge status={item.status || 'Pending'} onChange={(s) => onStatusChange(mom, idx, s)} />
+                      <StatusHistoryLog history={getStatusHistory(item)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
+export default function MomTracker({ isAdmin, permissions, onBack, linkedMeeting, readOnly = false }) {
   const [moms, setMoms] = useState([])
   const [members, setMembers] = useState([])
   const [attendanceMeetings, setAttendanceMeetings] = useState([])
+  const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [editingMom, setEditingMom] = useState(null)
   const [selectedMom, setSelectedMom] = useState(null)
   const [search, setSearch] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [activeTab, setActiveTab] = useState('moms')
 
   // Guard: redirect non-admins
   if (!isAdmin) {
@@ -1252,7 +1891,7 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
       if (cancelled) return
       const q = mod.query(mod.collection(db, 'moms'), mod.orderBy('meetingDate', 'desc'))
       unsub = mod.onSnapshot(q, (snap) => {
-        setMoms(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setMoms(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => !m.deletedAt))
         setLoading(false)
       })
     })
@@ -1290,6 +1929,19 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
     return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
+  // Firestore — Treasurer Transactions (for auto-fetching Financial Updates)
+  useEffect(() => {
+    let unsub
+    let cancelled = false
+    loadFirestore().then(({ mod, db }) => {
+      if (cancelled) return
+      unsub = mod.onSnapshot(mod.collection(db, 'treasurer_transactions'), (snap) => {
+        setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      })
+    })
+    return () => { cancelled = true; if (unsub) unsub() }
+  }, [])
+
   // Auto-open modal when navigated from AttendanceTracker
   useEffect(() => {
     if (!linkedMeeting || !members.length || loading) return
@@ -1314,35 +1966,62 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
 
   const handleSave = async (form) => {
     const { mod, db } = await loadFirestore()
+    const admin = await getCurrentAdminEmail()
     if (editingMom?.id) {
       const updates = { ...form, updatedAt: mod.serverTimestamp() }
       if (editingMom.linkedMeetingId) updates.linkedMeetingId = editingMom.linkedMeetingId
       await mod.updateDoc(mod.doc(db, 'moms', editingMom.id), updates)
+      backupToSheet('moms', editingMom.id, 'save', { ...editingMom, ...form }, admin)
       if (selectedMom?.id === editingMom.id) setSelectedMom({ ...editingMom, ...form })
     } else {
       const data = { ...form, createdAt: mod.serverTimestamp() }
       if (editingMom?.linkedMeetingId) data.linkedMeetingId = editingMom.linkedMeetingId
-      await mod.addDoc(mod.collection(db, 'moms'), data)
+      const docRef = await mod.addDoc(mod.collection(db, 'moms'), data)
+      backupToSheet('moms', docRef.id, 'save', form, admin)
     }
     setEditingMom(null)
   }
 
   const handleDelete = async (mom) => {
-    const { mod, db } = await loadFirestore()
-    await mod.deleteDoc(mod.doc(db, 'moms', mom.id))
+    await softDelete('moms', mom.id, mom)
     if (selectedMom?.id === mom.id) setSelectedMom(null)
     setDeleteConfirm(null)
+  }
+
+  const stampStatusChange = (item, newStatus) => {
+    const entry = {
+      from: item.status || 'Pending',
+      to: newStatus,
+      by: permissions?.name || permissions?.email || 'Admin',
+      at: Date.now(),
+    }
+    return {
+      ...item,
+      status: newStatus,
+      statusHistory: [entry, ...getStatusHistory(item)],
+    }
   }
 
   const handleStatusChange = async (actionIdx, newStatus) => {
     if (!selectedMom) return
     const updatedActions = selectedMom.actionItems.map((a, i) =>
-      i === actionIdx ? { ...a, status: newStatus } : a
+      i === actionIdx ? stampStatusChange(a, newStatus) : a
     )
     const updated = { ...selectedMom, actionItems: updatedActions }
     setSelectedMom(updated)
     const { mod, db } = await loadFirestore()
     await mod.updateDoc(mod.doc(db, 'moms', selectedMom.id), { actionItems: updatedActions })
+    backupToSheet('moms', selectedMom.id, 'save', updated, await getCurrentAdminEmail())
+  }
+
+  const handleActionItemStatusChange = async (mom, actionIdx, newStatus) => {
+    const updatedActions = mom.actionItems.map((a, i) =>
+      i === actionIdx ? stampStatusChange(a, newStatus) : a
+    )
+    if (selectedMom?.id === mom.id) setSelectedMom({ ...selectedMom, actionItems: updatedActions })
+    const { mod, db } = await loadFirestore()
+    await mod.updateDoc(mod.doc(db, 'moms', mom.id), { actionItems: updatedActions })
+    backupToSheet('moms', mom.id, 'save', { ...mom, actionItems: updatedActions }, await getCurrentAdminEmail())
   }
 
   const filtered = moms.filter(m =>
@@ -1411,6 +2090,42 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
           </div>
         </motion.div>
 
+        {readOnly && (
+          <div className="sticky top-20 z-10 mb-6 px-4 py-3 rounded-xl bg-rotary-gold/10 border border-rotary-gold/30 text-sm font-medium text-rotary-gold">
+            View only — you don't have edit access to MoM Tracker.
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div className="flex items-center gap-2 mb-8 border-b border-gray-200">
+          {[
+            { key: 'moms', label: 'Minutes of Meeting' },
+            { key: 'actions', label: 'Action Items' },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${activeTab === t.key ? 'border-rotary-blue text-rotary-blue' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+            >
+              {t.label}
+              {t.key === 'actions' && pendingCount > 0 && (
+                <span className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold">{pendingCount}</span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className={readOnly ? 'pointer-events-none select-none opacity-75' : ''}>
+
+        {activeTab === 'actions' ? (
+          <ActionItemsTable
+            moms={moms}
+            onOpenMom={(mom) => { setActiveTab('moms'); setSelectedMom(mom) }}
+            onStatusChange={handleActionItemStatusChange}
+            readOnly={readOnly}
+          />
+        ) : (
+        <>
         {/* Stats */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10">
           {[
@@ -1540,6 +2255,9 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
             })}
           </div>
         )}
+        </>
+        )}
+        </div>
       </div>
 
       {/* Create / Edit modal */}
@@ -1550,6 +2268,7 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
         initial={editingMom}
         members={members}
         attendanceMeetings={attendanceMeetings}
+        transactions={transactions}
       />
 
       {/* Detail drawer */}
@@ -1559,6 +2278,7 @@ export default function MomTracker({ isAdmin, onBack, linkedMeeting }) {
         onEdit={() => { setEditingMom(selectedMom); setSelectedMom(null); setModalOpen(true) }}
         onDelete={() => setDeleteConfirm(selectedMom)}
         onStatusChange={handleStatusChange}
+        members={members}
       />
 
       {/* Delete confirm */}

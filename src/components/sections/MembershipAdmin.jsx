@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useCollection } from '../../hooks/useFirestore'
 
@@ -9,6 +9,24 @@ const STATUS_STYLES = {
   contacted: { label: 'Contacted', dot: 'bg-amber-500',   badge: 'bg-amber-50 text-amber-700 border-amber-200' },
   approved:  { label: 'Approved',  dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   rejected:  { label: 'Rejected',  dot: 'bg-red-500',     badge: 'bg-red-50 text-red-700 border-red-200' },
+}
+
+function isPresident(m) {
+  const r = `${m.role || ''} ${m.role2 || ''}`.toLowerCase()
+  return r.includes('president') && !r.includes('vice') && !r.includes('past') && !r.includes('ipp')
+}
+function isSecretary(m) {
+  return `${m.role || ''} ${m.role2 || ''}`.toLowerCase().includes('secretary')
+}
+function isMembershipDirector(m) {
+  const r = `${m.role || ''} ${m.role2 || ''}`.toLowerCase()
+  return r.includes('director') && m.avenue === 'Membership'
+}
+function assigneeRoleLabel(m) {
+  if (isPresident(m)) return 'President'
+  if (isMembershipDirector(m)) return 'Membership Director'
+  if (isSecretary(m)) return 'Secretary'
+  return ''
 }
 
 function toDate(value) {
@@ -32,6 +50,51 @@ function StatusBadge({ status }) {
   )
 }
 
+function formatDateTime(ts) {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function getStatusHistory(application) {
+  return Array.isArray(application.statusHistory) ? application.statusHistory : []
+}
+
+function StatusHistoryLog({ history = [] }) {
+  const [open, setOpen] = useState(false)
+  if (history.length === 0) return null
+  const [latest, ...rest] = history
+
+  const Entry = ({ h }) => (
+    <p className="text-[10px] text-gray-400">
+      {STATUS_STYLES[h.from]?.label || h.from} → {STATUS_STYLES[h.to]?.label || h.to} by <span className="font-semibold text-gray-500">{h.by}</span> · {formatDateTime(h.at)}
+    </p>
+  )
+
+  return (
+    <div className="mt-2 pt-2 border-t border-gray-100">
+      <div className="flex items-center justify-between gap-2">
+        <Entry h={latest} />
+        {rest.length > 0 && (
+          <button
+            onClick={() => setOpen(o => !o)}
+            className="text-[10px] font-semibold text-rotary-blue hover:underline flex-shrink-0 flex items-center gap-0.5"
+          >
+            {open ? 'Hide' : `+${rest.length} more`}
+            <svg className={`w-2.5 h-2.5 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        )}
+      </div>
+      {open && rest.length > 0 && (
+        <div className="mt-1 space-y-1 pl-2 border-l-2 border-gray-100">
+          {rest.map((h, i) => <Entry key={i} h={h} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function exportCSV(applications, getAssigneeName) {
   const headers = ['Name', 'Email', 'Phone', 'Age', 'Occupation', 'Areas of Interest', 'Heard From', 'Reason', 'Status', 'Assigned To', 'Submitted']
   const rows = applications.map(a => [
@@ -49,7 +112,7 @@ function exportCSV(applications, getAssigneeName) {
   URL.revokeObjectURL(url)
 }
 
-function ApplicationDrawer({ application, users, onClose, onStatusChange, onAssigneeChange, onDelete }) {
+function ApplicationDrawer({ application, assignableLeaders, onClose, onStatusChange, onAssigneeChange, onDelete, readOnly = false }) {
   if (!application) return null
   return (
     <motion.div
@@ -116,7 +179,13 @@ function ApplicationDrawer({ application, users, onClose, onStatusChange, onAssi
             </div>
           )}
 
-          <div className="pt-2">
+          {readOnly && (
+            <div className="px-3.5 py-2.5 rounded-xl bg-rotary-gold/10 border border-rotary-gold/30 text-xs font-medium text-rotary-gold">
+              View only — you don't have edit access to Membership Applications.
+            </div>
+          )}
+
+          <div className={`pt-2 ${readOnly ? 'pointer-events-none opacity-60' : ''}`}>
             <p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold mb-2">Update Status</p>
             <div className="flex flex-wrap gap-2">
               {STATUS_STEPS.map(step => (
@@ -133,9 +202,10 @@ function ApplicationDrawer({ application, users, onClose, onStatusChange, onAssi
                 </button>
               ))}
             </div>
+            <StatusHistoryLog history={getStatusHistory(application)} />
           </div>
 
-          <div className="pt-1">
+          <div className={`pt-1 ${readOnly ? 'pointer-events-none opacity-60' : ''}`}>
             <p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold mb-2">Assigned To (Follow-up)</p>
             <select
               className="w-full px-3 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 cursor-pointer"
@@ -143,27 +213,30 @@ function ApplicationDrawer({ application, users, onClose, onStatusChange, onAssi
               onChange={e => onAssigneeChange(application, e.target.value)}
             >
               <option value="">Unassigned</option>
-              {users.map(u => (
-                <option key={u.id} value={u.id}>{u.name || u.email}</option>
+              {assignableLeaders.map(l => (
+                <option key={l.id} value={l.id}>{l.name} — {assigneeRoleLabel(l)}</option>
               ))}
             </select>
+            <p className="text-[10px] text-gray-400 mt-1.5">Only the President, Secretary, and Membership Director can be assigned.</p>
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-100 shrink-0">
-          <button
-            onClick={() => onDelete(application)}
-            className="w-full py-3 rounded-xl bg-red-50 text-red-500 border border-red-100 text-sm font-semibold hover:bg-red-100 transition-colors"
-          >
-            Delete Application
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="px-6 py-4 border-t border-gray-100 shrink-0">
+            <button
+              onClick={() => onDelete(application)}
+              className="w-full py-3 rounded-xl bg-red-50 text-red-500 border border-red-100 text-sm font-semibold hover:bg-red-100 transition-colors"
+            >
+              Delete Application
+            </button>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   )
 }
 
-export default function MembershipAdmin({ isAdmin, onBack }) {
+export default function MembershipAdmin({ isAdmin, permissions, onBack, readOnly = false, initialStatusFilter, initialAssigneeFilter }) {
 
   if (!isAdmin) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -178,15 +251,40 @@ export default function MembershipAdmin({ isAdmin, onBack }) {
     </div>
   )
 
-  const { data: applications, loading, save, remove } = useCollection('membershipApplications')
-  const { data: users } = useCollection('users')
+  const { data: applications, loading, save, remove, saveMany } = useCollection('membershipApplications')
+  const { data: leaders } = useCollection('leaders')
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('All')
-  const [assigneeFilter, setAssigneeFilter] = useState('All')
+  const [statusFilter, setStatusFilter] = useState(initialStatusFilter || 'All')
+  const [assigneeFilter, setAssigneeFilter] = useState(initialAssigneeFilter || 'All')
   const [selected, setSelected] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
 
-  const assigneeName = (id) => users.find(u => u.id === id)?.name || users.find(u => u.id === id)?.email || null
+  const assignableLeaders = leaders.filter(l => isPresident(l) || isSecretary(l) || isMembershipDirector(l))
+  const membershipDirector = leaders.find(isMembershipDirector)
+
+  const assigneeName = (id) => assignableLeaders.find(l => l.id === id)?.name || null
+
+  const stampStatusChange = (application, newStatus) => ({
+    ...application,
+    status: newStatus,
+    statusHistory: [
+      { from: application.status || 'new', to: newStatus, by: permissions?.name || permissions?.email || 'Admin', at: Date.now() },
+      ...getStatusHistory(application),
+    ],
+  })
+
+  // New applications default to the Membership Director until someone reassigns them.
+  // Also heals stale assignments — older records pointed assignedTo at a users-collection
+  // doc id (pre leader-based assignment); those no longer resolve to an assignable leader,
+  // so treat them as unassigned and fall back to the Membership Director.
+  useEffect(() => {
+    if (!membershipDirector || readOnly || !leaders.length) return
+    applications
+      .filter(a => !a.assignedTo || !assignableLeaders.some(l => l.id === a.assignedTo))
+      .forEach(a => save({ ...a, assignedTo: membershipDirector.id }))
+  }, [applications, membershipDirector?.id, leaders.length])
 
   const totalNew = applications.filter(a => (a.status || 'new') === 'new').length
   const totalContacted = applications.filter(a => a.status === 'contacted').length
@@ -204,8 +302,9 @@ export default function MembershipAdmin({ isAdmin, onBack }) {
 
   const handleStatusChange = async (application, status) => {
     try {
-      await save({ ...application, status })
-      setSelected(s => s && s.id === application.id ? { ...s, status } : s)
+      const updated = stampStatusChange(application, status)
+      await save(updated)
+      setSelected(s => s && s.id === application.id ? updated : s)
     } catch (err) {
       console.error('Update status error:', err)
     }
@@ -229,6 +328,46 @@ export default function MembershipAdmin({ isAdmin, onBack }) {
     }
     setDeleteTarget(null)
     setSelected(null)
+  }
+
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  const clearSelection = () => setSelectedIds(new Set())
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(a => a.id)))
+  }
+
+  const handleBulkStatus = async (status) => {
+    try {
+      await saveMany(applications.filter(a => selectedIds.has(a.id)).map(a => stampStatusChange(a, status)))
+    } catch (err) {
+      console.error('Bulk status update error:', err)
+    }
+    clearSelection()
+  }
+
+  const handleBulkAssign = async (assignedTo) => {
+    try {
+      await saveMany(applications.filter(a => selectedIds.has(a.id)).map(a => ({ ...a, assignedTo: assignedTo || null })))
+    } catch (err) {
+      console.error('Bulk assign error:', err)
+    }
+    clearSelection()
+  }
+
+  const handleBulkDelete = async () => {
+    try {
+      await Promise.all([...selectedIds].map(id => remove(id)))
+    } catch (err) {
+      console.error('Bulk delete error:', err)
+    }
+    setBulkDeleteConfirm(false)
+    clearSelection()
   }
 
   return (
@@ -321,8 +460,8 @@ export default function MembershipAdmin({ isAdmin, onBack }) {
             >
               <option value="All">All Assignees</option>
               <option value="Unassigned">Unassigned</option>
-              {users.map(u => (
-                <option key={u.id} value={u.id}>{u.name || u.email}</option>
+              {assignableLeaders.map(l => (
+                <option key={l.id} value={l.id}>{l.name} — {assigneeRoleLabel(l)}</option>
               ))}
             </select>
             <button
@@ -353,42 +492,85 @@ export default function MembershipAdmin({ isAdmin, onBack }) {
                 </p>
               </div>
             ) : (
-              <div className="grid gap-2.5">
-                {filtered.map((application, i) => (
-                  <motion.div
-                    key={application.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.03 }}
-                    onClick={() => setSelected(application)}
-                    className="bg-white rounded-2xl border border-gray-100 p-4 cursor-pointer hover:shadow-md hover:border-rotary-blue/20 hover:-translate-y-0.5 transition-all duration-300 group"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-rotary-blue/10 text-rotary-blue flex items-center justify-center shrink-0 font-bold text-sm">
-                        {application.name?.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                          <p className="font-display font-bold text-sm">{application.name}</p>
-                          <StatusBadge status={application.status || 'new'} />
-                          {assigneeName(application.assignedTo) && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
-                              👤 {assigneeName(application.assignedTo)}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-400 truncate">{application.email}</p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-[10px] text-gray-400">{formatDate(application.submittedAt)}</p>
-                      </div>
-                      <svg className="w-4 h-4 text-gray-300 group-hover:text-rotary-blue transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
+              <>
+                <div className="flex items-center mb-3">
+                  {!readOnly && selectedIds.size > 0 ? (
+                    <div className="flex flex-wrap items-center gap-2 w-full bg-rotary-blue/5 border border-rotary-blue/20 rounded-xl px-4 py-2.5">
+                      <span className="text-xs font-bold text-rotary-blue mr-1 shrink-0">{selectedIds.size} selected</span>
+                      <button onClick={() => handleBulkStatus('approved')} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">Approve</button>
+                      <button onClick={() => handleBulkStatus('rejected')} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors">Reject</button>
+                      <select
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 bg-white cursor-pointer"
+                        defaultValue=""
+                        onChange={e => { if (e.target.value) handleBulkAssign(e.target.value); e.target.value = '' }}
+                      >
+                        <option value="" disabled>Assign to…</option>
+                        {assignableLeaders.map(l => (
+                          <option key={l.id} value={l.id}>{l.name} — {assigneeRoleLabel(l)}</option>
+                        ))}
+                      </select>
+                      <button onClick={() => setBulkDeleteConfirm(true)} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white text-red-500 border border-red-200 hover:bg-red-50 transition-colors">Delete</button>
+                      <button onClick={clearSelection} className="ml-auto text-xs font-semibold text-gray-400 hover:text-gray-600 transition-colors shrink-0">Clear</button>
                     </div>
-                  </motion.div>
-                ))}
-              </div>
+                  ) : !readOnly && (
+                    <label className="flex items-center gap-2 text-xs font-semibold text-gray-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.size === filtered.length && filtered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                      />
+                      Select all {filtered.length}
+                    </label>
+                  )}
+                </div>
+                <div className="grid gap-2.5">
+                  {filtered.map((application, i) => (
+                    <motion.div
+                      key={application.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.03 }}
+                      onClick={() => setSelected(application)}
+                      className="bg-white rounded-2xl border border-gray-100 p-4 cursor-pointer hover:shadow-md hover:border-rotary-blue/20 hover:-translate-y-0.5 transition-all duration-300 group"
+                    >
+                      <div className="flex items-center gap-3">
+                        {!readOnly && (
+                          <div onClick={e => e.stopPropagation()} className="shrink-0 flex items-center">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(application.id)}
+                              onChange={() => toggleSelect(application.id)}
+                              className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                            />
+                          </div>
+                        )}
+                        <div className="w-10 h-10 rounded-xl bg-rotary-blue/10 text-rotary-blue flex items-center justify-center shrink-0 font-bold text-sm">
+                          {application.name?.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                            <p className="font-display font-bold text-sm">{application.name}</p>
+                            <StatusBadge status={application.status || 'new'} />
+                            {assigneeName(application.assignedTo) && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                                👤 {assigneeName(application.assignedTo)}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-400 truncate">{application.email}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-[10px] text-gray-400">{formatDate(application.submittedAt)}</p>
+                        </div>
+                        <svg className="w-4 h-4 text-gray-300 group-hover:text-rotary-blue transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -398,11 +580,12 @@ export default function MembershipAdmin({ isAdmin, onBack }) {
         {selected && (
           <ApplicationDrawer
             application={selected}
-            users={users}
+            assignableLeaders={assignableLeaders}
             onClose={() => setSelected(null)}
             onStatusChange={handleStatusChange}
             onAssigneeChange={handleAssigneeChange}
             onDelete={(application) => setDeleteTarget(application)}
+            readOnly={readOnly}
           />
         )}
       </AnimatePresence>
@@ -430,6 +613,33 @@ export default function MembershipAdmin({ isAdmin, onBack }) {
               <div className="flex gap-3">
                 <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50 transition-colors">Cancel</button>
                 <button onClick={handleDeleteConfirm} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">Delete</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {bulkDeleteConfirm && (
+          <motion.div
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          >
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setBulkDeleteConfirm(false)} />
+            <motion.div
+              className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-100"
+              initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
+            >
+              <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <h3 className="font-display font-bold text-lg mb-1">Delete {selectedIds.size} Application{selectedIds.size === 1 ? '' : 's'}?</h3>
+              <p className="text-sm text-gray-400 mb-6">This will permanently delete the selected applications.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setBulkDeleteConfirm(false)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50 transition-colors">Cancel</button>
+                <button onClick={handleBulkDelete} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">Delete</button>
               </div>
             </motion.div>
           </motion.div>

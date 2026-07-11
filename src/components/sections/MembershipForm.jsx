@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
+import { backupToSheet } from '../../utils/trash'
+import { sendWhatsAppNotification } from '../../utils/whatsapp'
 
 const fadeUp = (delay = 0) => ({
   initial: { opacity: 0, y: 24 },
@@ -52,7 +54,7 @@ export default function MembershipForm({ onBack }) {
     try {
       const { loadFirestore } = await import('../../firebase')
       const { mod, db } = await loadFirestore()
-      await mod.addDoc(mod.collection(db, 'membershipApplications'), {
+      const record = {
         name: form.name.trim(),
         email: form.email.trim().toLowerCase(),
         phone: form.phone.trim(),
@@ -62,8 +64,13 @@ export default function MembershipForm({ onBack }) {
         heardFrom: form.heardFrom,
         reason: form.reason.trim(),
         status: 'new',
+      }
+      const docRef = await mod.addDoc(mod.collection(db, 'membershipApplications'), {
+        ...record,
         submittedAt: mod.serverTimestamp(),
       })
+      backupToSheet('membershipApplications', docRef.id, 'create', record, 'public form')
+      sendWhatsAppNotification(`New membership application: ${record.name} (${record.email}, ${record.phone})`)
       setForm(EMPTY_FORM)
       setStatus('sent')
     } catch (err) {

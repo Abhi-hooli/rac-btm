@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import DOMPurify from 'dompurify'
 import { useCollection } from '../../hooks/useFirestore'
 import { logAction } from '../../utils/auditLog'
-import { loadFirestore } from '../../firebase'
+import { loadFirestore, getCurrentAdminEmail } from '../../firebase'
+import { backupToSheet } from '../../utils/trash'
 
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
 
@@ -126,10 +128,14 @@ function PostView({ post, onBack }) {
                     </button>
                 </div>
 
-                {/* Content */}
+                {/* Content — sanitized on render, not just on save, so a
+                    malicious edit already sitting in Firestore (e.g. from a
+                    compromised or over-permissioned admin account) can never
+                    execute for a visitor even if it slipped past any
+                    write-side check. */}
                 <div
                     className="prose prose-lg dark:prose-invert max-w-none text-rotary-charcoal dark:text-white/80 leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: post.content }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(post.content || '') }}
                     style={{ lineHeight: 1.8 }}
                 />
 
@@ -395,8 +401,10 @@ function SubscriberPanel() {
     const handleDelete = async (id) => {
         if (!window.confirm('Remove this subscriber?')) return
         setDeletingId(id)
+        const record = subs.find(s => s.id === id)
         const { mod, db } = await loadFirestore()
         await mod.deleteDoc(mod.doc(db, 'subscribers', id))
+        backupToSheet('subscribers', id, 'delete', record, await getCurrentAdminEmail())
         setSubs(prev => prev.filter(s => s.id !== id))
         setDeletingId(null)
     }

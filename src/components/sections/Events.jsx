@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Card from '../ui/Card'
 import { useCollection } from '../../hooks/useFirestore'
@@ -22,6 +22,37 @@ function formatTime(time24) {
   const [h, m] = time24.split(':')
   const hour = parseInt(h)
   return `${hour % 12 || 12}:${m} ${hour >= 12 ? 'PM' : 'AM'}`
+}
+
+// End date/time, defaulting to 1hr after start when the event has no explicit end set.
+function getEventEnd(event) {
+  if (event.endDate || event.endTime) {
+    return { date: event.endDate || event.date, time: event.endTime || event.time }
+  }
+  if (!event.date || !event.time) return { date: event.date, time: event.time }
+  const end = new Date(`${event.date}T${event.time}`)
+  end.setHours(end.getHours() + 1)
+  const pad = n => String(n).padStart(2, '0')
+  return {
+    date: `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`,
+    time: `${pad(end.getHours())}:${pad(end.getMinutes())}`,
+  }
+}
+
+function toICSDateTime(date, time) {
+  return `${date.replace(/-/g, '')}T${time ? time.replace(':', '') + '00' : '000000'}`
+}
+
+// e.g. "12 July 2026 · 11:00 AM – 1:00 PM" or, spanning days, "12 July 2026 11:00 AM – 13 July 2026 1:00 PM"
+function formatEventSchedule(event, dateOpts) {
+  const startLabel = new Date(event.date).toLocaleDateString('en-IN', dateOpts)
+  const startTime = formatTime(event.time)
+  if (!event.endDate && !event.endTime) return `${startLabel} · ${startTime}`
+  const endDateStr = event.endDate || event.date
+  const endTimeLabel = formatTime(event.endTime || event.time)
+  if (endDateStr === event.date) return `${startLabel} · ${startTime} – ${endTimeLabel}`
+  const endLabel = new Date(endDateStr).toLocaleDateString('en-IN', dateOpts)
+  return `${startLabel} ${startTime} – ${endLabel} ${endTimeLabel}`
 }
 
 function getRsvpStorageKey(eventId) { return `rsvp_${eventId}` }
@@ -209,7 +240,7 @@ function RSVPModal({ event, onClose, onSuccess, existingRsvp }) {
             <div className="min-w-0">
               <p className="text-xs font-semibold text-rotary-gold uppercase tracking-wider mb-0.5">RSVP</p>
               <h3 className="font-display font-bold text-gray-900 dark:text-white leading-tight truncate">{event.title}</h3>
-              <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">{new Date(event.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · {formatTime(event.time)}</p>
+              <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">{formatEventSchedule(event, { day: 'numeric', month: 'short', year: 'numeric' })}</p>
             </div>
             <button onClick={onClose} className="ml-auto shrink-0 w-8 h-8 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-white transition-colors">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -266,13 +297,14 @@ function RSVPModal({ event, onClose, onSuccess, existingRsvp }) {
                 <h4 className="font-display font-bold text-xl text-gray-900 dark:text-white mb-2">You're in!</h4>
                 <p className="text-sm text-rotary-slate dark:text-white/50 mb-6 max-w-xs mx-auto">Your RSVP has been confirmed. Add this event to your calendar!</p>
                 <div className="flex flex-col gap-2 mb-4">
-                  <a href={`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(event.title)}&dates=${event.date.replace(/-/g,'')}T${event.time?event.time.replace(':','')+'00':'000000'}/${event.date.replace(/-/g,'')}T${event.time?event.time.replace(':','')+'00':'000000'}&details=${encodeURIComponent('Rotaract Club Bengaluru BTM Event')}&location=${encodeURIComponent(event.location)}`}
+                  <a href={`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(event.title)}&dates=${toICSDateTime(event.date, event.time)}/${toICSDateTime(getEventEnd(event).date, getEventEnd(event).time)}&details=${encodeURIComponent('Rotaract Club Bengaluru BTM Event')}&location=${encodeURIComponent(event.location)}`}
                     target="_blank" rel="noopener noreferrer"
                     className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-gray-200 dark:border-white/10 text-sm font-semibold text-gray-700 dark:text-white/70 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
                     <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="" />Add to Google Calendar
                   </a>
                   <button onClick={() => {
-                    const ics = ['BEGIN:VCALENDAR','VERSION:2.0','BEGIN:VEVENT',`SUMMARY:${event.title}`,`DTSTART:${event.date.replace(/-/g,'')}T${event.time?event.time.replace(':','')+'00':'000000'}`,`DTEND:${event.date.replace(/-/g,'')}T${event.time?event.time.replace(':','')+'00':'000000'}`,`LOCATION:${event.location}`,'DESCRIPTION:Rotaract Club Bengaluru BTM Event','END:VEVENT','END:VCALENDAR'].join('\n')
+                    const end = getEventEnd(event)
+                    const ics = ['BEGIN:VCALENDAR','VERSION:2.0','BEGIN:VEVENT',`SUMMARY:${event.title}`,`DTSTART:${toICSDateTime(event.date, event.time)}`,`DTEND:${toICSDateTime(end.date, end.time)}`,`LOCATION:${event.location}`,'DESCRIPTION:Rotaract Club Bengaluru BTM Event','END:VEVENT','END:VCALENDAR'].join('\n')
                     const blob = new Blob([ics],{type:'text/calendar'}); const url = URL.createObjectURL(blob)
                     const a = document.createElement('a'); a.href=url; a.download=`${event.title.replace(/\s+/g,'_')}.ics`; a.click(); URL.revokeObjectURL(url)
                   }} className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-gray-200 dark:border-white/10 text-sm font-semibold text-gray-700 dark:text-white/70 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
@@ -378,12 +410,12 @@ function EventModal({ event, onClose, rsvpCount }) {
         <div className="p-6">
           {event.description && <p className="text-rotary-charcoal dark:text-white/70 mb-5 leading-relaxed">{event.description}</p>}
           <div className="space-y-3 mb-5">
-            <div className="flex items-center gap-3 text-sm text-rotary-charcoal dark:text-white/60"><svg className="w-4 h-4 text-rotary-blue shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>{new Date(event.date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
-            <div className="flex items-center gap-3 text-sm text-rotary-charcoal dark:text-white/60"><svg className="w-4 h-4 text-rotary-blue shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>{formatTime(event.time)}</div>
+            <div className="flex items-center gap-3 text-sm text-rotary-charcoal dark:text-white/60"><svg className="w-4 h-4 text-rotary-blue shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>{new Date(event.date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}{event.endDate && event.endDate !== event.date && <> – {new Date(event.endDate).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</>}</div>
+            <div className="flex items-center gap-3 text-sm text-rotary-charcoal dark:text-white/60"><svg className="w-4 h-4 text-rotary-blue shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>{formatTime(event.time)}{event.endTime && <> – {formatTime(event.endTime)}</>}</div>
             <div className="flex items-center gap-3 text-sm text-rotary-charcoal dark:text-white/60"><svg className="w-4 h-4 text-rotary-blue shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>{event.location}</div>
             {rsvpCount > 0 && <div className="flex items-center gap-3 text-sm text-green-600 dark:text-green-400"><svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>{rsvpCount} {rsvpCount === 1 ? 'person has' : 'people have'} RSVP'd</div>}
           </div>
-          <CountdownTimer targetDate={event.date} />
+          <CountdownTimer targetDate={`${event.date}T${event.time || '00:00'}`} />
         </div>
       </motion.div>
     </motion.div>
@@ -392,7 +424,11 @@ function EventModal({ event, onClose, rsvpCount }) {
 
 export default function Events({ isAdmin, setCurrentPage }) {
   const { data: events, loading: eventsLoading, save, remove } = useCollection('events', [], { live: isAdmin })
+  const sortedEvents = [...events].sort((a, b) => `${a.date}T${a.time || '00:00'}`.localeCompare(`${b.date}T${b.time || '00:00'}`))
   const { data: rsvps, loading: rsvpsLoading } = useCollection('rsvps', [], isAdmin)
+  // Completed projects awaiting a super-admin/secretary decision to feature on the site.
+  const { data: avenueProjectsData } = useCollection('avenueProjects', [], { enabled: isAdmin })
+  const pendingFeatures = (avenueProjectsData || []).filter(p => p.featureRequested && !p.featurePublished && !p.deletedAt)
   const [selectedEvent,  setSelectedEvent]  = useState(null)
   const [rsvpEvent,      setRsvpEvent]      = useState(null)
   const [adminRsvpEvent, setAdminRsvpEvent] = useState(null)
@@ -400,7 +436,8 @@ export default function Events({ isAdmin, setCurrentPage }) {
   const [editingId,      setEditingId]      = useState(null)
   const [deleteId,       setDeleteId]       = useState(null)
   const [myRsvps,        setMyRsvps]        = useState({})
-  const [form, setForm] = useState({ title:'', date:'', time:'', location:'', type:eventTypes[0], image:'', description:'' })
+  const [form, setForm] = useState({ title:'', date:'', time:'', endDate:'', endTime:'', location:'', type:eventTypes[0], image:'', description:'' })
+  const formRef = useRef(null)
 
   useEffect(() => {
     if (!events) return
@@ -415,7 +452,7 @@ export default function Events({ isAdmin, setCurrentPage }) {
     if (hash.startsWith('event-')) { const found = events.find(e => e.id === hash.replace('event-','')); if (found) setRsvpEvent(found) }
   }, [events])
 
-  const resetForm = () => { setForm({ title:'', date:'', time:'', location:'', type:eventTypes[0], image:'', description:'' }); setEditingId(null); setShowForm(false) }
+  const resetForm = () => { setForm({ title:'', date:'', time:'', endDate:'', endTime:'', location:'', type:eventTypes[0], image:'', description:'' }); setEditingId(null); setShowForm(false) }
 
   const handleSave = async () => {
     if (!form.title || !form.date || !form.time || !form.location) return
@@ -428,8 +465,9 @@ export default function Events({ isAdmin, setCurrentPage }) {
   }
 
   const handleEdit = (event) => {
-    setForm({ title:event.title, date:event.date, time:event.time, location:event.location, type:event.type, image:event.image||'', description:event.description||'' })
+    setForm({ title:event.title, date:event.date, time:event.time, endDate:event.endDate||'', endTime:event.endTime||'', location:event.location, type:event.type, image:event.image||'', description:event.description||'' })
     setEditingId(event.id); setShowForm(true)
+    requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }
 
   const handleConfirmDelete = async () => {
@@ -462,6 +500,15 @@ export default function Events({ isAdmin, setCurrentPage }) {
           <p className="text-rotary-slate dark:text-white/50 max-w-2xl mx-auto">Be part of our community gatherings, service projects, and celebration events.</p>
         </motion.div>
 
+        {isAdmin && pendingFeatures.length > 0 && (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl bg-rotary-blue/5 border border-rotary-blue/20">
+            <p className="text-sm font-medium text-rotary-blue">
+              {pendingFeatures.length} completed project{pendingFeatures.length === 1 ? '' : 's'} awaiting your approval to feature on the site.
+            </p>
+            <button onClick={() => setCurrentPage?.('activeProjects')} className="text-xs font-bold text-rotary-blue hover:underline shrink-0">Review in Active Projects →</button>
+          </div>
+        )}
+
         {isAdmin && (
           <div className="flex justify-end mb-6">
             <button onClick={() => { if (showForm && !editingId) resetForm(); else { resetForm(); setShowForm(true) } }}
@@ -474,15 +521,17 @@ export default function Events({ isAdmin, setCurrentPage }) {
 
         <AnimatePresence>
           {isAdmin && showForm && (
-            <motion.div className="mb-10 bg-white dark:bg-rotary-navy rounded-xl p-6 md:p-8 border border-gray-100 dark:border-white/5 shadow-sm" initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:'auto' }} exit={{ opacity:0, height:0 }}>
+            <motion.div ref={formRef} className="mb-10 scroll-mt-24 bg-white dark:bg-rotary-navy rounded-xl p-6 md:p-8 border border-gray-100 dark:border-white/5 shadow-sm" initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:'auto' }} exit={{ opacity:0, height:0 }}>
               <h3 className="font-display font-semibold text-lg mb-5">{editingId ? 'Edit Event' : 'New Event'}</h3>
               <div className="grid md:grid-cols-2 gap-4">
                 <input className={inputClass} placeholder="Event Title *" value={form.title} onChange={e => setForm({...form, title:e.target.value})} />
                 <select className={inputClass} value={form.type} onChange={e => setForm({...form, type:e.target.value})}>
                   {eventTypes.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
-                <div><label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Date *</label><input className={inputClass} type="date" value={form.date} onChange={e => setForm({...form, date:e.target.value})} /></div>
-                <div><label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Time *</label><input className={inputClass} type="time" value={form.time} onChange={e => setForm({...form, time:e.target.value})} /></div>
+                <div><label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Start Date *</label><input className={inputClass} type="date" value={form.date} onChange={e => setForm({...form, date:e.target.value})} /></div>
+                <div><label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Start Time *</label><input className={inputClass} type="time" value={form.time} onChange={e => setForm({...form, time:e.target.value})} /></div>
+                <div><label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">End Date</label><input className={inputClass} type="date" min={form.date || undefined} value={form.endDate} onChange={e => setForm({...form, endDate:e.target.value})} /></div>
+                <div><label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">End Time</label><input className={inputClass} type="time" value={form.endTime} onChange={e => setForm({...form, endTime:e.target.value})} /></div>
                 <input className={inputClass} placeholder="Location *" value={form.location} onChange={e => setForm({...form, location:e.target.value})} />
                 <input className={inputClass} placeholder="Image URL (optional)" value={form.image} onChange={e => setForm({...form, image:e.target.value})} />
                 <textarea className={`${inputClass} md:col-span-2`} rows={3} placeholder="Description" value={form.description} onChange={e => setForm({...form, description:e.target.value})} />
@@ -498,7 +547,7 @@ export default function Events({ isAdmin, setCurrentPage }) {
         </AnimatePresence>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {events.map((event, i) => {
+          {sortedEvents.map((event, i) => {
             const myRsvp    = myRsvps[event.id]
             const rsvpCount = getRsvpCountForEvent(event.id)
             const isPast    = new Date(event.date) < new Date()
@@ -509,7 +558,7 @@ export default function Events({ isAdmin, setCurrentPage }) {
 
                   {/* Admin controls */}
                   {isAdmin && (
-                    <div className="absolute top-2 right-2 z-20 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute top-2 right-2 z-20 flex gap-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                       {/* Remind button */}
                       <ReminderButton event={event} />
                       {/* RSVP list */}
@@ -540,12 +589,12 @@ export default function Events({ isAdmin, setCurrentPage }) {
                   <div className="flex-1 cursor-pointer" onClick={() => setSelectedEvent(event)}>
                     <h3 className="font-display font-semibold text-lg mb-3 leading-snug">{event.title}</h3>
                     <div className="space-y-2 mb-4 text-sm text-rotary-slate dark:text-white/50">
-                      <div className="flex items-center gap-2"><svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>{new Date(event.date).toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })}</div>
-                      <div className="flex items-center gap-2"><svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>{formatTime(event.time)}</div>
+                      <div className="flex items-center gap-2"><svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>{new Date(event.date).toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })}{event.endDate && event.endDate !== event.date && <> – {new Date(event.endDate).toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })}</>}</div>
+                      <div className="flex items-center gap-2"><svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>{formatTime(event.time)}{event.endTime && <> – {formatTime(event.endTime)}</>}</div>
                       <div className="flex items-center gap-2"><svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>{event.location}</div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <CountdownTimer targetDate={event.date} />
+                      <CountdownTimer targetDate={`${event.date}T${event.time || '00:00'}`} />
                       {!rsvpsLoading && rsvpCount > 0 && (
                         <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-50 dark:bg-green-500/10 border border-green-100 dark:border-green-500/20">
                           <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />

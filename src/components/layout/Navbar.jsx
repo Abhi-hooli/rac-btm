@@ -21,7 +21,7 @@ const navLinks = [
   { name: 'Join Us', href: '#', isPage: true, pageKey: 'join' },
 ]
 
-export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onArchives, onContact, onMom, onRsvpAdmin, onUserManagement, onBlog, onNewsletter, onLinkRedirects, onMembershipAdmin, onJoin, currentPage, maintenanceMode, onToggleMaintenance }) {
+export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout, onLogoClick, onTreasurer, onAnalytics, onAttendance, onCalendar, onDocuments, onArchives, onContact, onMom, onRsvpAdmin, onUserManagement, onBlog, onNewsletter, onLinkRedirects, onMembershipAdmin, onAvenueProjects, onActiveProjects, onFundraising, onProfile, onJoin, onTrash, currentPage, maintenanceMode, onToggleMaintenance }) {
   const [isScrolled, setIsScrolled] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
@@ -191,10 +191,23 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 6, scale: 0.97 }}
                       transition={{ duration: 0.15 }}
-                      className="absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden"
+                      className="absolute right-0 mt-2 w-60 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden"
                     >
+                      {/* Profile */}
+                      <button
+                        onClick={() => { setAdminDropdownOpen(false); onProfile?.() }}
+                        className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-gray-50 hover:text-rotary-blue transition-colors"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
+                          👤
+                        </div>
+                        <span className="flex-1 text-left">Profile</span>
+                      </button>
+
+                      <div className="mx-3 border-t border-gray-100" />
+
                       {/* 1. Club Analytics */}
-                      {permissions?.analytics && (
+                      {(permissions?.analytics || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onAnalytics?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-blue-50 hover:text-blue-700 transition-colors"
@@ -202,12 +215,12 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                           <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
                             📊
                           </div>
-                          Club Analytics
+                          <span className="flex-1 text-left">Club Analytics</span>
                         </button>
                       )}
 
                       {/* 2. Attendance Tracker */}
-                      {permissions?.attendance && (
+                      {(permissions?.attendance || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onAttendance?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-rotary-blue/5 hover:text-rotary-blue transition-colors"
@@ -217,12 +230,12 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                             </svg>
                           </div>
-                          Attendance Tracker
+                          <span className="flex-1 text-left">Attendance Tracker</span>
                         </button>
                       )}
 
                       {/* 3. MoM Tracker */}
-                      {permissions?.mom && (
+                      {(permissions?.mom || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onMom?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-purple-50 hover:text-purple-700 transition-colors"
@@ -232,12 +245,12 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                           </div>
-                          MoM Tracker
+                          <span className="flex-1 text-left">MoM Tracker</span>
                         </button>
                       )}
 
                       {/* 4. Finance Dashboard */}
-                      {permissions?.treasurer && (
+                      {(permissions?.treasurer || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onTreasurer?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-rotary-gold/5 hover:text-rotary-gold transition-colors"
@@ -247,12 +260,27 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                             </svg>
                           </div>
-                          Finance Dashboard
+                          <span className="flex-1 text-left">Finance Dashboard</span>
+                        </button>
+                      )}
+
+                      {/* Fundraising Tracker */}
+                      {(permissions?.treasurer || permissions?.avenueProjectsApprove || permissions?.viewAll) && (
+                        <button
+                          onClick={() => { setAdminDropdownOpen(false); onFundraising?.() }}
+                          className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-rotary-gold/5 hover:text-rotary-gold transition-colors"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-rotary-gold/10 flex items-center justify-center flex-shrink-0">
+                            <svg className="w-3.5 h-3.5 text-rotary-gold" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          </div>
+                          <span className="flex-1 text-left">Fundraising Tracker</span>
                         </button>
                       )}
 
                       {/* 5. RSVP Manager */}
-                      {permissions?.rsvp && (
+                      {(permissions?.rsvp || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onRsvpAdmin?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
@@ -260,7 +288,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                           <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0">
                             🎟️
                           </div>
-                          RSVP Manager
+                          <span className="flex-1 text-left">RSVP Manager</span>
                         </button>
                       )}
 
@@ -272,11 +300,11 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                         <div className="w-7 h-7 rounded-lg bg-pink-50 flex items-center justify-center flex-shrink-0">
                           📰
                         </div>
-                        Newsletter
+                        <span className="flex-1 text-left">Newsletter</span>
                       </button>
 
                       {/* Link Redirects */}
-                      {permissions?.linkRedirects && (
+                      {(permissions?.linkRedirects || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onLinkRedirects?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-sky-50 hover:text-sky-700 transition-colors"
@@ -284,12 +312,12 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                           <div className="w-7 h-7 rounded-lg bg-sky-50 flex items-center justify-center flex-shrink-0">
                             🔗
                           </div>
-                          Link Redirects
+                          <span className="flex-1 text-left">Link Redirects</span>
                         </button>
                       )}
 
                       {/* Membership Applications */}
-                      {permissions?.membership && (
+                      {(permissions?.membership || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onMembershipAdmin?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
@@ -297,14 +325,40 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                           <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0">
                             📋
                           </div>
-                          Membership Applications
+                          <span className="flex-1 text-left">Membership Applications</span>
+                        </button>
+                      )}
+
+                      {/* Avenue Project Planning */}
+                      {(permissions?.avenueProjects || permissions?.avenueProjectsApprove || permissions?.viewAll) && (
+                        <button
+                          onClick={() => { setAdminDropdownOpen(false); onAvenueProjects?.() }}
+                          className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-purple-50 hover:text-purple-700 transition-colors"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center flex-shrink-0">
+                            💡
+                          </div>
+                          <span className="flex-1 text-left">Avenue Project Planning</span>
+                        </button>
+                      )}
+
+                      {/* Active Projects (execution workspace) */}
+                      {(permissions?.avenueProjects || permissions?.avenueProjectsApprove || permissions?.treasurer || permissions?.viewAll) && (
+                        <button
+                          onClick={() => { setAdminDropdownOpen(false); onActiveProjects?.() }}
+                          className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-violet-50 hover:text-violet-700 transition-colors"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-violet-50 flex items-center justify-center flex-shrink-0">
+                            <svg className="w-3.5 h-3.5 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                          </div>
+                          <span className="flex-1 text-left">Active Projects</span>
                         </button>
                       )}
 
                       <div className="mx-3 border-t border-gray-100" />
 
                       {/* 6. User Management */}
-                      {permissions?.userManagement && (
+                      {(permissions?.userManagement || permissions?.viewAll) && (
                         <button
                           onClick={() => { setAdminDropdownOpen(false); onUserManagement?.() }}
                           className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-amber-50 hover:text-amber-700 transition-colors"
@@ -312,7 +366,20 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                           <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
                             👥
                           </div>
-                          User Management
+                          <span className="flex-1 text-left">User Management</span>
+                        </button>
+                      )}
+
+                      {/* Trash — super admin only */}
+                      {permissions?.isSuperAdmin && (
+                        <button
+                          onClick={() => { setAdminDropdownOpen(false); onTrash?.() }}
+                          className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium text-rotary-charcoal hover:bg-red-50 hover:text-red-700 transition-colors"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0">
+                            🗑️
+                          </div>
+                          <span className="flex-1 text-left">Trash</span>
                         </button>
                       )}
 
@@ -351,7 +418,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                           </svg>
                         </div>
-                        Sign Out
+                        <span className="flex-1 text-left">Sign Out</span>
                       </button>
                     </motion.div>
                   )}
@@ -414,7 +481,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                     <div key={link.name} className="col-span-2">
                       <button
                         onClick={() => setMobileLeadershipOpen(o => !o)}
-                        className="flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-sm font-medium text-rotary-charcoal/80 hover:text-rotary-blue hover:bg-rotary-blue/5 transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-medium text-rotary-charcoal/80 hover:text-rotary-blue hover:bg-rotary-blue/5 transition-colors"
                       >
                         {link.name}
                         <svg
@@ -454,8 +521,16 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
 
               {isAdmin && (
                 <div className="mt-2 pt-3 border-t border-gray-100 flex flex-col gap-1.5">
+                  {/* Profile */}
+                  <button
+                    onClick={() => { setIsMenuOpen(false); onProfile?.() }}
+                    className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-gray-50 text-rotary-charcoal border border-gray-100 hover:bg-gray-100 transition-colors"
+                  >
+                    👤 Profile
+                  </button>
+
                   {/* 1. Club Analytics */}
-                  {permissions?.analytics && (
+                  {(permissions?.analytics || permissions?.viewAll) && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onAnalytics?.() }}
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100 transition-colors"
@@ -465,7 +540,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                   )}
 
                   {/* 2. Attendance Tracker */}
-                  {permissions?.attendance && (
+                  {(permissions?.attendance || permissions?.viewAll) && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onAttendance?.() }}
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-rotary-blue/8 text-rotary-blue border border-rotary-blue/15 hover:bg-rotary-blue/15 transition-colors"
@@ -478,7 +553,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                   )}
 
                   {/* 3. MoM Tracker */}
-                  {permissions?.mom && (
+                  {(permissions?.mom || permissions?.viewAll) && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onMom?.() }}
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-purple-50 text-purple-700 border border-purple-100 hover:bg-purple-100 transition-colors"
@@ -491,7 +566,7 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                   )}
 
                   {/* 4. Finance Dashboard */}
-                  {permissions?.treasurer && (
+                  {(permissions?.treasurer || permissions?.viewAll) && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onTreasurer?.() }}
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-rotary-gold/8 text-rotary-gold border border-rotary-gold/15 hover:bg-rotary-gold/15 transition-colors"
@@ -503,8 +578,21 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                     </button>
                   )}
 
+                  {/* Fundraising Tracker */}
+                  {(permissions?.treasurer || permissions?.avenueProjectsApprove || permissions?.viewAll) && (
+                    <button
+                      onClick={() => { setIsMenuOpen(false); onFundraising?.() }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-rotary-gold/8 text-rotary-gold border border-rotary-gold/15 hover:bg-rotary-gold/15 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Fundraising Tracker
+                    </button>
+                  )}
+
                   {/* 5. RSVP Manager */}
-                  {permissions?.rsvp && (
+                  {(permissions?.rsvp || permissions?.viewAll) && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onRsvpAdmin?.() }}
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100 hover:bg-emerald-100 transition-colors"
@@ -513,18 +601,8 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                     </button>
                   )}
 
-                  {/* 6. User Management */}
-                  {permissions?.userManagement && (
-                    <button
-                      onClick={() => { setIsMenuOpen(false); onUserManagement?.() }}
-                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-100 transition-colors"
-                    >
-                      👥 User Management
-                    </button>
-                  )}
-
-                  {/* 7. Link Redirects */}
-                  {permissions?.linkRedirects && (
+                  {/* 6. Link Redirects */}
+                  {(permissions?.linkRedirects || permissions?.viewAll) && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onLinkRedirects?.() }}
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-sky-50 text-sky-700 border border-sky-100 hover:bg-sky-100 transition-colors"
@@ -533,13 +611,59 @@ export default function Navbar({ isDark, isAdmin, permissions, onLogin, onLogout
                     </button>
                   )}
 
-                  {/* 8. Membership Applications */}
-                  {permissions?.membership && (
+                  {/* 7. Membership Applications */}
+                  {(permissions?.membership || permissions?.viewAll) && (
                     <button
                       onClick={() => { setIsMenuOpen(false); onMembershipAdmin?.() }}
                       className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100 transition-colors"
                     >
                       📋 Membership Applications
+                    </button>
+                  )}
+
+                  {/* 8. Avenue Project Planning */}
+                  {(permissions?.avenueProjects || permissions?.viewAll) && (
+                    <button
+                      onClick={() => { setIsMenuOpen(false); onAvenueProjects?.() }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-purple-50 text-purple-700 border border-purple-100 hover:bg-purple-100 transition-colors"
+                    >
+                      💡 Avenue Project Planning
+                    </button>
+                  )}
+
+                  {/* 9. Active Projects */}
+                  {(permissions?.avenueProjects || permissions?.avenueProjectsApprove || permissions?.treasurer || permissions?.viewAll) && (
+                    <button
+                      onClick={() => { setIsMenuOpen(false); onActiveProjects?.() }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-violet-50 text-violet-700 border border-violet-100 hover:bg-violet-100 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      Active Projects
+                    </button>
+                  )}
+
+                  {/* Admin controls */}
+                  {(permissions?.userManagement || permissions?.viewAll || permissions?.isSuperAdmin) && (
+                    <div className="mx-1 mt-1 mb-0.5 border-t border-gray-100" />
+                  )}
+
+                  {/* 9. User Management */}
+                  {(permissions?.userManagement || permissions?.viewAll) && (
+                    <button
+                      onClick={() => { setIsMenuOpen(false); onUserManagement?.() }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-100 transition-colors"
+                    >
+                      👥 User Management
+                    </button>
+                  )}
+
+                  {/* Trash — super admin only */}
+                  {permissions?.isSuperAdmin && (
+                    <button
+                      onClick={() => { setIsMenuOpen(false); onTrash?.() }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-red-50 text-red-700 border border-red-100 hover:bg-red-100 transition-colors"
+                    >
+                      🗑️ Trash
                     </button>
                   )}
 

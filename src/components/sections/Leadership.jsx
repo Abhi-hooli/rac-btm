@@ -55,7 +55,7 @@ export function LeaderCard({ leader, i }) {
       </motion.div>
 
       <h3 className="font-display font-semibold text-base mb-0.5">{leader.name}</h3>
-      <p className="text-rotary-gold text-sm font-medium">{leader.role}</p>
+      <p className="text-rotary-gold text-sm font-medium">{leader.role}{leader.role2 ? ` & ${leader.role2}` : ''}</p>
     </motion.div>
   )
 }

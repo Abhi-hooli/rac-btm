@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as XLSX from 'xlsx'
-import { loadFirestore } from '../../firebase'
+import { loadFirestore, getCurrentAdminEmail } from '../../firebase'
+import { softDelete, backupToSheet } from '../../utils/trash'
 
 const pct = (attended, total) =>
   total === 0 ? 0 : Math.round((attended / total) * 100)
@@ -298,7 +299,7 @@ function DetailDrawer({ record, members, onClose, onEdit }) {
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
-export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
+export default function AttendanceTracker({ onBack, onCreateMom, isAdmin, readOnly = false }) {
 
   if (!isAdmin) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -347,7 +348,7 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
       if (cancelled) return
       const q = mod.query(mod.collection(db, 'attendance_meetings'), mod.orderBy('date', 'desc'))
       unsub = mod.onSnapshot(q, snap => {
-        setMeetings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setMeetings(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => !m.deletedAt))
         setLoading(false)
       })
     })
@@ -373,7 +374,7 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
       if (cancelled) return
       unsub = mod.onSnapshot(mod.collection(db, 'moms'), snap => {
         const ids = new Set()
-        snap.docs.forEach(d => { const data = d.data(); if (data.linkedMeetingId) ids.add(data.linkedMeetingId) })
+        snap.docs.forEach(d => { const data = d.data(); if (data.linkedMeetingId && !data.deletedAt) ids.add(data.linkedMeetingId) })
         setLinkedMomIds(ids)
       })
     })
@@ -383,19 +384,21 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
   // ── CRUD ──
   const saveMeeting = async ({ title, date, type, presentIds }) => {
     const { mod, db } = await loadFirestore()
+    const admin = await getCurrentAdminEmail()
     if (modalRecord?.id && modalRecord?.sourceType !== 'project') {
       await mod.updateDoc(mod.doc(db, 'attendance_meetings', modalRecord.id), { title, date, type, presentIds, updatedAt: mod.serverTimestamp() })
+      backupToSheet('attendance_meetings', modalRecord.id, 'save', { title, date, type, presentIds }, admin)
     } else {
       const payload = { title, date, type, presentIds, createdAt: mod.serverTimestamp() }
       if (modalRecord?.projectId) payload.projectId = modalRecord.projectId
-      await mod.addDoc(mod.collection(db, 'attendance_meetings'), payload)
+      const docRef = await mod.addDoc(mod.collection(db, 'attendance_meetings'), payload)
+      backupToSheet('attendance_meetings', docRef.id, 'save', { title, date, type, presentIds }, admin)
     }
     setModalRecord(null)
   }
 
   const deleteMeeting = async (id) => {
-    const { mod, db } = await loadFirestore()
-    await mod.deleteDoc(mod.doc(db, 'attendance_meetings', id))
+    await softDelete('attendance_meetings', id, meetings.find(m => m.id === id))
     setDeleteId(null)
   }
 
@@ -613,6 +616,13 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
             )}
           </div>
         </motion.div>
+
+        {readOnly && (
+          <div className="sticky top-20 z-10 mb-6 px-4 py-3 rounded-xl bg-rotary-gold/10 border border-rotary-gold/30 text-sm font-medium text-rotary-gold">
+            View only — you don't have edit access to Attendance Tracker.
+          </div>
+        )}
+        <div className={readOnly ? 'pointer-events-none select-none opacity-75' : ''}>
 
         {/* ── Stat Cards ── */}
         <motion.div
@@ -888,6 +898,7 @@ export default function AttendanceTracker({ onBack, onCreateMom, isAdmin }) {
             )}
           </motion.div>
         )}
+        </div>
       </div>
 
       <MarkAttendanceModal isOpen={modalOpen} onClose={() => { setModalOpen(false); setModalRecord(null) }} onSave={saveMeeting} members={members} record={modalRecord} />

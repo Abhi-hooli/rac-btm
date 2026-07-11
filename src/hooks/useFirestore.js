@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
-import { loadFirestore } from '../firebase'
+import { useState, useEffect, useMemo } from 'react'
+import { loadFirestore, getCurrentAdminEmail } from '../firebase'
 import { restGetDoc, restGetCollection } from '../lib/firestoreRest'
+import { isTrashEnabled, softDelete, backupToSheet } from '../utils/trash'
 
 // Module-level cache so remounting a page (e.g. switching dashboards and
 // coming back) renders cached data instantly instead of showing a loading
@@ -19,28 +20,52 @@ const documentCache = new Map()
 //    see updates.
 // A bare boolean for `options` is treated as `enabled` for backwards compat.
 export function useCollection(collectionName, fallback = [], options = true) {
-  const { enabled = true, live = true } = typeof options === 'boolean' ? { enabled: options } : options
+  const { enabled = true, live = true, includeDeleted = false, once = false } = typeof options === 'boolean' ? { enabled: options } : options
   const cached = collectionCache.get(collectionName)
-  const [data, setData] = useState(cached ?? fallback)
+  const [rawData, setRawData] = useState(cached ?? fallback)
   const [loading, setLoading] = useState(!cached)
+  // Memoized so the returned array keeps a stable reference across renders
+  // when rawData hasn't actually changed — otherwise every consumer with
+  // data/events/etc. in a useEffect dependency array re-fires every render.
+  const data = useMemo(
+    () => (includeDeleted ? rawData : rawData.filter(d => !d?.deletedAt)),
+    [rawData, includeDeleted]
+  )
 
   useEffect(() => {
     if (!enabled) {
-      setData(fallback)
+      setRawData(fallback)
       setLoading(false)
       return
     }
     let cancelled = false
     let unsub
 
-    if (live) {
+    if (once) {
+      // One-time authenticated SDK read — no persistent listener. Use for
+      // glance views (e.g. the Profile task list) that don't need realtime
+      // updates but still read auth-gated collections the REST path can't.
+      loadFirestore().then(({ mod, db }) => {
+        if (cancelled) return
+        mod.getDocs(mod.collection(db, collectionName)).then(snap => {
+          if (cancelled) return
+          const docs = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+          collectionCache.set(collectionName, docs)
+          setRawData(docs)
+          setLoading(false)
+        }).catch(err => {
+          console.error(`Firestore getDocs error [${collectionName}]:`, err)
+          if (!cancelled) setLoading(false)
+        })
+      })
+    } else if (live) {
       loadFirestore().then(({ mod, db }) => {
         if (cancelled) return
         const ref = mod.collection(db, collectionName)
         unsub = mod.onSnapshot(ref, (snap) => {
           const docs = snap.docs.map(d => ({ ...d.data(), id: d.id }))
           collectionCache.set(collectionName, docs)
-          setData(docs)
+          setRawData(docs)
           setLoading(false)
         }, (err) => {
           console.error(`Firestore error [${collectionName}]:`, err)
@@ -51,7 +76,7 @@ export function useCollection(collectionName, fallback = [], options = true) {
       restGetCollection(collectionName).then(docs => {
         if (cancelled) return
         collectionCache.set(collectionName, docs)
-        setData(docs)
+        setRawData(docs)
         setLoading(false)
       }).catch(err => {
         console.error(`Firestore REST error [${collectionName}]:`, err)
@@ -60,16 +85,27 @@ export function useCollection(collectionName, fallback = [], options = true) {
     }
 
     return () => { cancelled = true; if (unsub) unsub() }
-  }, [collectionName, enabled, live])
+  }, [collectionName, enabled, live, once])
 
   const save = async (item) => {
     if (!item.id) throw new Error(`save() called without id in collection "${collectionName}"`)
     const { mod, db } = await loadFirestore()
     const ref = mod.doc(db, collectionName, item.id)
     await mod.setDoc(ref, item)
+    if (isTrashEnabled(collectionName)) {
+      backupToSheet(collectionName, item.id, 'save', item, await getCurrentAdminEmail())
+    }
   }
 
+  // Soft-deletes (tags deletedAt/deletedBy + backs up the full record) for
+  // collections in TRASH_COLLECTIONS so a super admin can restore it from
+  // the Trash view within 7 days; everything else hard-deletes as before.
   const remove = async (id) => {
+    if (isTrashEnabled(collectionName)) {
+      const existing = rawData.find(d => d.id === id)
+      await softDelete(collectionName, id, existing)
+      return
+    }
     const { mod, db } = await loadFirestore()
     await mod.deleteDoc(mod.doc(db, collectionName, id))
   }

@@ -113,7 +113,7 @@ export default function About({ isAdmin, setCurrentPage }) {
               <span className="text-gradient">Bengaluru</span>
             </h2>
             <p className="text-lg text-gray-600 dark:text-white/70 mb-6">
-              Rotaract Bengaluru BTM is a community-based Rotaract club affiliated to Rotary International District 3191. We bring together young professionals and students aged 18–30 who believe in the power of service, leadership, and fellowship to transform communities.
+              Rotaract Bengaluru BTM is a community-based Rotaract club affiliated to Rotary International District 3191 (RI Club ID 8826232). We bring together young professionals and students aged 18–30 who believe in the power of service, leadership, and fellowship to transform communities.
             </p>
             <p className="text-gray-600 dark:text-white/60 mb-4">
               Sponsored by our parent Rotary club, we operate at the intersection of social impact and personal development. Our members lead projects in women empowerment, environmental sustainability, education, and healthcare — while building professional skills, lifelong friendships, and a global network.

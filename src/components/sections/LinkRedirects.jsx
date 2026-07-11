@@ -19,7 +19,7 @@ function isValidUrl(str) {
   }
 }
 
-export default function LinkRedirects({ onBack }) {
+export default function LinkRedirects({ onBack, readOnly = false }) {
   const [links, setLinks] = useState([])
   const [clicks, setClicks] = useState([])
   const [loading, setLoading] = useState(true)
@@ -170,9 +170,15 @@ export default function LinkRedirects({ onBack }) {
           ))}
         </motion.div>
 
+        {readOnly && (
+          <div className="mb-6 px-4 py-3 rounded-xl bg-rotary-gold/10 border border-rotary-gold/30 text-sm font-medium text-rotary-gold">
+            View only — you don't have edit access to Link Redirects.
+          </div>
+        )}
+
         {/* Create form */}
         <motion.div
-          className="card-surface p-5 mb-8"
+          className={`card-surface p-5 mb-8 ${readOnly ? 'pointer-events-none select-none opacity-75' : ''}`}
           initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
         >
           <h2 className="font-display font-semibold text-base mb-4">Create New Link</h2>
@@ -272,8 +278,9 @@ export default function LinkRedirects({ onBack }) {
                     </button>
 
                     <button
-                      onClick={() => setDeleteSlug(link.id)}
-                      className="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                      onClick={() => !readOnly && setDeleteSlug(link.id)}
+                      disabled={readOnly}
+                      className="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />

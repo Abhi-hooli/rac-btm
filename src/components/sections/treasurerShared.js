@@ -4,7 +4,13 @@
 export const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque']
 
 export const INCOME_CATEGORIES = ['Membership Dues', 'Sponsorship', 'Donations', 'Fundraising', 'Merchandise Sales', 'Event Registration', 'Interest Income', 'Other Income']
-export const EXPENSE_CATEGORIES = ['RI Dues', 'District Dues', 'Installation', 'Charter Day', 'Club Service', 'Community Service', 'Professional Development', 'International Service', 'Public Image', 'Membership Development', 'Fellowship', 'Meeting Expenses', 'Website & Technology', 'Printing & Stationery', 'Merchandise', 'Awards & Recognition', 'Bank Charges', 'Miscellaneous']
+export const EXPENSE_CATEGORIES = ['RI Dues', 'District Dues', 'Installation', 'DOV Ceremony', 'Charter Day', 'Club Service', 'Community Service', 'Professional Development', 'International Service', 'Public Image', 'Membership Development', 'Fellowship', 'Meeting Expenses', 'Website & Technology', 'Printing & Stationery', 'Merchandise', 'Awards & Recognition', 'Bank Charges', 'Miscellaneous']
+
+// Rotaract's 7 Avenues of Service — separate from Budget Head, since a
+// transaction's accounting category (e.g. "Printing & Stationery") and which
+// avenue-of-service project it funded are two different questions. Kept
+// independent so spend can be reported per avenue regardless of budget head.
+export const AVENUES = ['Not Applicable', 'Club Service', 'Community Service', 'Professional Development', 'International Service', 'Public Image', 'Fundraising', 'DEI (Diversity, Equity, & Inclusion)']
 
 export function inRange(dateStr, from, to) {
   if (!dateStr) return true
@@ -14,6 +20,13 @@ export function inRange(dateStr, from, to) {
   if (to && d > new Date(to)) return false
   return true
 }
+
+// Sponsorships auto-generated from a written-off transaction or a self-funded
+// event expense never brought cash into the club account — the linked expense
+// is already excluded from spend, so counting these toward "Collected"/income
+// as well would inflate the balance by money the club never actually held.
+export const NON_CASH_SPONSORSHIP_SOURCES = ['written-off', 'self-funded-expense']
+export const isNonCashSponsorship = (s) => NON_CASH_SPONSORSHIP_SOURCES.includes(s?.source)
 
 // ── Annual Forecast — Budget 26-27, fully editable ──
 export const DEFAULT_FORECAST = {
@@ -72,7 +85,7 @@ export const FORECAST_TO_EXPENSE_MAP = {
   'Club Banner, Standees & Branding': 'Public Image',
   'Board Member Badges / Pins': 'Miscellaneous',
   'Installation Ceremony': 'Installation',
-  'DOV Ceremony': 'Miscellaneous',
+  'DOV Ceremony': 'DOV Ceremony',
   'General Body Meetings': 'Meeting Expenses',
   'Board Meetings': 'Meeting Expenses',
   'Fellowship Activities': 'Fellowship',

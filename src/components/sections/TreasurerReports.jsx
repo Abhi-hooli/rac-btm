@@ -1,4 +1,4 @@
-import { EXPENSE_CATEGORIES, resolveApprovedBudget } from './treasurerShared'
+import { EXPENSE_CATEGORIES, resolveApprovedBudget, inRange, isNonCashSponsorship } from './treasurerShared'
 
 // Validated categorical palette (fixed order — see dataviz skill reference palette).
 const CATEGORY_COLORS = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834']
@@ -12,9 +12,48 @@ function monthLabel(key) {
   const [y, m] = key.split('-')
   return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
 }
+function weekKey(dateStr) {
+  const d = new Date(dateStr)
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)) // back up to Monday
+  return d.toISOString().slice(0, 10)
+}
+function weekLabel(key) {
+  return `Wk ${new Date(key).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
+}
+function dayKey(dateStr) {
+  return new Date(dateStr).toISOString().slice(0, 10)
+}
+function dayLabel(key) {
+  return new Date(key).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+
+// New clubs won't have two months of history for a while — rather than show
+// nothing, fall back to weekly, then daily buckets so a trend still appears
+// as soon as there are transactions on at least two different days.
+// Cumulative balance is always computed over ALL history (so the running
+// total is correct) even though only the last `displayLimit` buckets show.
+function buildCashFlowPoints(transactions, keyFn, labelFn, displayLimit) {
+  const bucket = {}
+  transactions.forEach(t => {
+    if (!t.date) return
+    const key = keyFn(t.date)
+    if (!bucket[key]) bucket[key] = { income: 0, expense: 0 }
+    bucket[key][t.type === 'Income' ? 'income' : 'expense'] += t.amount || 0
+  })
+  const allKeys = Object.keys(bucket).sort()
+  if (allKeys.length < 2) return null
+  let running = 0
+  const cumulative = {}
+  allKeys.forEach(k => {
+    running += (bucket[k].income || 0) - (bucket[k].expense || 0)
+    cumulative[k] = running
+  })
+  return allKeys.slice(-displayLimit).map(k => ({ key: k, label: labelFn(k), value: cumulative[k] }))
+}
 
 function cashFlowSVG(points) {
-  if (points.length < 2) return '<p style="font-size:11px;color:#9ca3af">Need at least two months of transactions to plot a trend.</p>'
+  if (points.length < 2) return '<p style="font-size:11px;color:#9ca3af">Add transactions on at least two different days to see a trend.</p>'
   const W = 600, H = 130, padX = 12, padY = 14
   const values = points.map(p => p.value)
   const minV = Math.min(0, ...values)
@@ -96,7 +135,7 @@ function exportTreasurerReportPDF(d) {
     <img src="${logoUrl}" onerror="this.style.display='none'" />
     <div>
       <div class="org-name">Rotaract Club of Bengaluru BTM</div>
-      <div class="org-sub">Rotary International District 3191</div>
+      <div class="org-sub">Rotary International District 3191 · RI Club ID 8826232</div>
       <span class="org-badge">Rotary Year ${rotaryYearStart}–${rotaryYearStart + 1}</span>
     </div>
   </div>
@@ -198,7 +237,7 @@ ${d.budgetSummaryRows.length > 0 ? `<div class="section-title">Budget Summary</d
 // Single-series running balance — thin line, rounded data-ends, zero-baseline, hover via <title>.
 function CashFlowChart({ points }) {
   if (points.length < 2) {
-    return <p className="text-sm text-rotary-slate dark:text-white/30 text-center py-14">Need at least two months of transactions to plot a trend.</p>
+    return <p className="text-sm text-rotary-slate dark:text-white/30 text-center py-14">Add transactions on at least two different days to see a trend.</p>
   }
   const W = 600, H = 160, padX = 12, padY = 16
   const values = points.map(p => p.value)
@@ -253,7 +292,18 @@ function StatTile({ label, value, sub, color = 'text-rotary-charcoal dark:text-w
   )
 }
 
-export default function TreasurerReports({ members, leaders, transactions, forecast, approvedBudget }) {
+export default function TreasurerReports({ members, leaders, transactions, eventLedger = [], sponsorships = [], forecast, approvedBudget, dateRange = {} }) {
+  // Respect the same date-range filter every other tab on this page uses —
+  // otherwise this "consolidated overview" silently shows all-time figures
+  // while everything else on screen reflects the selected range, which reads
+  // as a mismatch. Membership dues/collection stay all-time regardless (a
+  // due either exists or doesn't — it isn't a dated flow), matching how the
+  // Balance Sheet tab treats "Total Dues" too.
+  const { from, to } = dateRange
+  const filteredTransactions = (from || to) ? transactions.filter(t => inRange(t.date, from, to)) : transactions
+  const filteredEventLedger = (from || to) ? eventLedger.filter(e => inRange(e.date, from, to)) : eventLedger
+  const filteredSponsorships = (from || to) ? sponsorships.filter(s => inRange(s.date, from, to)) : sponsorships
+
   // ── Members ──
   const workingCount = members.filter(m => leaders.find(l => l.name?.toLowerCase() === m.name?.toLowerCase())?.memberType === 'working').length
   const studentCount = members.length - workingCount
@@ -261,23 +311,40 @@ export default function TreasurerReports({ members, leaders, transactions, forec
   const collectedDues = members.reduce((s, m) => s + (m.paid || 0), 0)
   const collectionPct = expectedRevenue > 0 ? Math.round((collectedDues / expectedRevenue) * 100) : 0
 
-  // ── Transactions ──
-  const totalRevenue = transactions.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
-  const totalExpenses = transactions.filter(t => t.type === 'Expense').reduce((s, t) => s + (t.amount || 0), 0)
+  // ── Revenue & Expenses ──
+  // Matches the same comprehensive formula used on the Overview cards and
+  // Balance Sheet tab: revenue = dues collected + sponsorships + event ticket
+  // income + other transaction income; expenses = event expenses + other
+  // transaction expenses. Written-off transactions and self-funded event
+  // expenses are excluded — the club never actually paid that money out (a
+  // member covered it as a donation instead, tracked separately as a
+  // sponsorship), so it shouldn't count as real spend or income.
+  const totalTransactionIncome = filteredTransactions.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
+  const totalTransactionExpense = filteredTransactions.filter(t => t.type === 'Expense' && t.reimbursableStatus !== 'Written Off').reduce((s, t) => s + (t.amount || 0), 0)
+  const cashSponsorships = filteredSponsorships.filter(s => !isNonCashSponsorship(s)).reduce((s, x) => s + (x.amount || 0), 0)
+  const totalEventIncome = filteredEventLedger.reduce((s, e) => s + (e.income || 0), 0)
+  const totalEventExpenses = filteredEventLedger.reduce((s, e) => s + (e.expenses || []).filter(x => !x.linkedSponsorshipId).reduce((ss, x) => ss + (x.amount || 0), 0), 0)
+  const totalRevenue = collectedDues + cashSponsorships + totalEventIncome + totalTransactionIncome
+  const totalExpenses = totalEventExpenses + totalTransactionExpense
   const balance = totalRevenue - totalExpenses
 
   // ── Budget ──
   const { budget, isFrozen } = resolveApprovedBudget(approvedBudget, forecast)
   const actualByCategory = EXPENSE_CATEGORIES.reduce((acc, cat) => {
-    acc[cat] = transactions.filter(t => t.type === 'Expense' && t.budgetHead === cat).reduce((s, t) => s + (t.amount || 0), 0)
+    acc[cat] = filteredTransactions.filter(t => t.type === 'Expense' && t.budgetHead === cat && t.reimbursableStatus !== 'Written Off').reduce((s, t) => s + (t.amount || 0), 0)
     return acc
   }, {})
   const totalApprovedBudget = EXPENSE_CATEGORIES.reduce((s, c) => s + (budget[c] || 0), 0)
   const totalSpent = EXPENSE_CATEGORIES.reduce((s, c) => s + (actualByCategory[c] || 0), 0)
 
+  // Excludes written-off expenses (see note above) from anywhere expense
+  // amounts get aggregated below — trend charts and cash flow shouldn't
+  // treat them as real spend either.
+  const spendableTransactions = filteredTransactions.filter(t => t.type !== 'Expense' || t.reimbursableStatus !== 'Written Off')
+
   // ── Monthly trend (last 6 months present in data) ──
   const monthMap = {}
-  transactions.forEach(t => {
+  spendableTransactions.forEach(t => {
     if (!t.date) return
     const key = monthKey(t.date)
     if (!monthMap[key]) monthMap[key] = { income: 0, expense: 0 }
@@ -286,15 +353,24 @@ export default function TreasurerReports({ members, leaders, transactions, forec
   const months = Object.keys(monthMap).sort().slice(-6)
   const maxMonthVal = Math.max(1, ...months.flatMap(k => [monthMap[k].income, monthMap[k].expense]))
 
-  // ── Running balance / cash-flow trend (cumulative across all history, shown for the last 6 months) ──
-  const allMonthKeys = Object.keys(monthMap).sort()
-  let runningTotal = 0
-  const cumulativeByMonth = {}
-  allMonthKeys.forEach(k => {
-    runningTotal += (monthMap[k].income || 0) - (monthMap[k].expense || 0)
-    cumulativeByMonth[k] = runningTotal
-  })
-  const cashFlowPoints = months.map(k => ({ key: k, label: monthLabel(k), value: cumulativeByMonth[k] }))
+  // ── Running balance / cash-flow trend ──
+  // Prefer monthly buckets, but a new club won't have two months of history
+  // for a while — fall back to weekly, then daily, so a trend still shows up
+  // as soon as there are transactions on two different days.
+  let cashFlowPoints = buildCashFlowPoints(spendableTransactions, monthKey, monthLabel, 6)
+  let cashFlowGranularity = 'month'
+  if (!cashFlowPoints) {
+    cashFlowPoints = buildCashFlowPoints(spendableTransactions, weekKey, weekLabel, 8)
+    cashFlowGranularity = 'week'
+  }
+  if (!cashFlowPoints) {
+    cashFlowPoints = buildCashFlowPoints(spendableTransactions, dayKey, dayLabel, 8)
+    cashFlowGranularity = 'day'
+  }
+  if (!cashFlowPoints) {
+    cashFlowPoints = []
+    cashFlowGranularity = null
+  }
 
   // ── Membership collection donut ──
   const paidCount = members.filter(m => m.paid >= m.annualDue && m.annualDue > 0).length
@@ -348,12 +424,15 @@ export default function TreasurerReports({ members, leaders, transactions, forec
     .sort((a, b) => b.spent - a.spent)
 
   const treasurerName = leaders.find(l => l.role?.toLowerCase().includes('treasurer'))?.name || ''
-  const presidentName = leaders.find(l => l.role?.toLowerCase().includes('president') && !l.role?.toLowerCase().includes('vice'))?.name || ''
+  const presidentName = leaders.find(l => {
+    const r = `${l.role || ''} ${l.role2 || ''}`.toLowerCase()
+    return r.includes('president') && !r.includes('vice') && !r.includes('past') && !r.includes('ipp')
+  })?.name || ''
 
   const handleExportPDF = () => exportTreasurerReportPDF({
     membersCount: members.length, workingCount, studentCount, expectedRevenue, collectedDues, collectionPct,
     totalRevenue, totalExpenses, balance, totalApprovedBudget, totalSpent, isFrozen,
-    months, monthMap, maxMonthVal, cashFlowPoints,
+    months, monthMap, maxMonthVal, cashFlowPoints, cashFlowGranularity,
     paidCount, partialCount, pendingCount,
     utilizationRows, pieStops, budgetSummaryRows, pendingDues, pendingReimbursements,
     treasurerName, presidentName,
@@ -437,7 +516,12 @@ export default function TreasurerReports({ members, leaders, transactions, forec
       </div>
 
       <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 p-5">
-        <h3 className="font-display font-semibold text-sm mb-4">Running Balance / Cash Flow</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-display font-semibold text-sm">Running Balance / Cash Flow</h3>
+          {cashFlowGranularity && cashFlowGranularity !== 'month' && (
+            <span className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/30">By {cashFlowGranularity}</span>
+          )}
+        </div>
         <CashFlowChart points={cashFlowPoints} />
       </div>
 

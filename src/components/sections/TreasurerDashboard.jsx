@@ -2,12 +2,44 @@ import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useCollection, useDocument } from '../../hooks/useFirestore'
 import {
-  PAYMENT_MODES, INCOME_CATEGORIES, EXPENSE_CATEGORIES, inRange,
-  DEFAULT_FORECAST, resolveApprovedBudget,
+  PAYMENT_MODES, INCOME_CATEGORIES, EXPENSE_CATEGORIES, AVENUES, inRange,
+  DEFAULT_FORECAST, resolveApprovedBudget, isNonCashSponsorship,
 } from './treasurerShared'
 import TreasurerReports from './TreasurerReports'
+import { FundraisingSummaryCard } from './FundraisingTracker'
 
 const inputClass = 'w-full px-4 py-2.5 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-rotary-blue/30 text-sm'
+
+// Shared tag for the auto-generated, per-member "written-off reimbursements"
+// sponsorship entry — multiple write-offs for the same person are piled into
+// one entry (identified by sponsor + this note) rather than one row each.
+const WRITTEN_OFF_SPONSORSHIP_NOTE = 'Written-off reimbursements'
+const WRITTEN_OFF_SOURCE = 'written-off'
+const SELF_FUNDED_SOURCE = 'self-funded-expense'
+
+// Adds (or subtracts, for reversal) `delta` from the aggregated written-off
+// sponsorship for `sponsor`. Creates it if it doesn't exist yet (delta > 0),
+// removes it if the running total drops to zero or below.
+async function adjustWrittenOffSponsorship({ sponsorships, saveSponsorship, removeSponsorship, sponsor, delta }) {
+  if (!delta) return
+  const existing = sponsorships.find(s => s.sponsor === sponsor && s.note === WRITTEN_OFF_SPONSORSHIP_NOTE)
+  const newAmount = (existing?.amount || 0) + delta
+  if (newAmount <= 0) {
+    if (existing) await removeSponsorship(existing.id)
+  } else if (existing) {
+    await saveSponsorship({ ...existing, amount: newAmount })
+  } else if (delta > 0) {
+    await saveSponsorship({
+      id: Date.now().toString() + '_sp',
+      sponsor,
+      amount: delta,
+      date: new Date().toISOString().split('T')[0],
+      type: 'In-Kind',
+      note: WRITTEN_OFF_SPONSORSHIP_NOTE,
+      source: WRITTEN_OFF_SOURCE,
+    })
+  }
+}
 
 function exportDuesCSV(members, leaders) {
   const headers =['#', 'Member Name', 'Type', 'Board Role', 'Email', 'Phone', 'Annual Due (₹)', 'Paid (₹)', 'Balance (₹)', 'Status', 'Progress', 'Payment Date', 'Payment Mode', 'Remarks']
@@ -46,12 +78,23 @@ function SummaryCards({ members, events, sponsorships = [], transactions = [], d
   const filteredTransactions = transactions.filter(t => inRange(t.date, from, to))
   const totalDues = members.reduce((sum, m) => sum + (m.annualDue || 0), 0)
   const totalTransactionIncome = filteredTransactions.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
-  const totalTransactionExpense = filteredTransactions.filter(t => t.type === 'Expense').reduce((s, t) => s + (t.amount || 0), 0)
-  const totalCollected = filteredMembers.reduce((sum, m) => sum + (m.paid || 0), 0)
-    + filteredSponsorships.reduce((sum, s) => sum + (s.amount || 0), 0)
+  // Written-off transactions and self-funded event expenses (linkedSponsorshipId
+  // set) never actually left club funds — the member covered them as a
+  // donation instead, already counted separately in Sponsorships — so they're
+  // excluded here to avoid inflating "Expenses" while Balance stays correct.
+  const totalTransactionExpense = filteredTransactions.filter(t => t.type === 'Expense' && t.reimbursableStatus !== 'Written Off').reduce((s, t) => s + (t.amount || 0), 0)
+  // Dues collected specifically (used for the Pending-against-dues figure) —
+  // kept separate from the broader "Collected" total below, which also needs
+  // to include event ticket-sales income and other sources for Balance to be
+  // accurate (this matches how the Balance Sheet tab computes total income).
+  const totalDuesCollected = filteredMembers.reduce((sum, m) => sum + (m.paid || 0), 0)
+  const totalEventIncome = filteredEvents.reduce((sum, e) => sum + (e.income || 0), 0)
+  const totalCollected = totalDuesCollected
+    + filteredSponsorships.filter(s => !isNonCashSponsorship(s)).reduce((sum, s) => sum + (s.amount || 0), 0)
+    + totalEventIncome
     + totalTransactionIncome
-  const totalPending = totalDues - totalCollected
-  const totalExpenses = filteredEvents.reduce((sum, e) => sum + (e.expenses || []).reduce((s, x) => s + (x.amount || 0), 0), 0)
+  const totalPending = totalDues - totalDuesCollected
+  const totalExpenses = filteredEvents.reduce((sum, e) => sum + (e.expenses || []).filter(x => !x.linkedSponsorshipId).reduce((s, x) => s + (x.amount || 0), 0), 0)
     + totalTransactionExpense
   const balance = totalCollected - totalExpenses
   const cards = [
@@ -126,6 +169,7 @@ function MembersDues({ members, leaders, saveMember, removeMember, dateRange = {
     <div class="header">
       <h1>Rotaract Bengaluru BTM</h1>
       <p>Official Membership Due Receipt</p>
+      <p style="margin:2px 0 0;opacity:0.7;font-size:11px">RI District 3191 · RI Club ID 8826232</p>
       <div class="badge">Rotary Year ${rotaryYearStart}–${rotaryYearEnd}</div>
     </div>
     <div class="body">
@@ -392,7 +436,15 @@ function MembersDues({ members, leaders, saveMember, removeMember, dateRange = {
                 </svg>
               </div>
               <h3 className="font-display font-bold text-lg mb-1">Remove Member?</h3>
-              <p className="text-sm text-gray-400 dark:text-white/50 mb-6">This will permanently remove this member's dues record.</p>
+              <p className="text-sm text-gray-400 dark:text-white/50 mb-6">
+                This will permanently remove this member's dues record, including their payment history. If they're
+                still listed on the Our Team page, they'll be automatically re-added on next load with dues reset to ₹0 paid —
+                remove them from Our Team first if you want the removal to stick.
+              </p>
+              <div className="flex gap-3">
+                <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-white/10 text-sm font-semibold hover:bg-gray-50 transition-colors">Cancel</button>
+                <button onClick={async () => { await removeMember(deleteId); setDeleteId(null) }} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">Remove</button>
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -526,20 +578,20 @@ function MembersDues({ members, leaders, saveMember, removeMember, dateRange = {
 }
 
 // ── Event Expenses Tab ──
-function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, projects = [] }) {
+function EventExpenses({ eventLedger, saveEvent, removeEvent, saveSponsorship, removeSponsorship, dateRange = {}, projects = [], members = [] }) {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [expandedEvent, setExpandedEvent] = useState(null)
   const [search, setSearch] = useState('')
   const [form, setForm] = useState({ eventName: '', date: '', budget: 0, income: 0 })
-  const [expenseForm, setExpenseForm] = useState({ description: '', amount: 0, category: 'Venue', paidBy: '' })
+  const [expenseForm, setExpenseForm] = useState({ description: '', amount: 0, category: 'Venue', paidBy: '', selfFunded: false })
   const [paymentForms, setPaymentForms] = useState({})
   const [expandedExpense, setExpandedExpense] = useState(null)
   const [deleteId, setDeleteId] = useState(null)
   const expenseCategories = ['Venue', 'Food & Beverages', 'Transport', 'Printing', 'Decoration', 'Equipment', 'Donation', 'Miscellaneous']
 
   const resetForm = () => { setForm({ eventName: '', date: '', budget: 0, income: 0 }); setEditingId(null); setShowForm(false) }
-  const resetExpenseForm = () => setExpenseForm({ description: '', amount: 0, category: 'Venue', paidBy: '' })
+  const resetExpenseForm = () => setExpenseForm({ description: '', amount: 0, category: 'Venue', paidBy: '', selfFunded: false })
 
   const handleSaveEvent = async () => {
     if (!form.eventName) return
@@ -564,10 +616,30 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
     if (!expenseForm.description || !expenseForm.amount) return
     const ev = eventLedger.find(e => e.id === eventId)
     if (!ev) return
+
+    // If a member covered this cost out of pocket, the club never actually
+    // spent that money — record a matching sponsorship so it offsets the
+    // expense in the balance instead of incorrectly looking like club cash
+    // was spent, and so the member gets credit for the contribution.
+    let linkedSponsorshipId = null
+    if (expenseForm.selfFunded && expenseForm.paidBy && saveSponsorship) {
+      linkedSponsorshipId = Date.now().toString() + '_sp'
+      await saveSponsorship({
+        id: linkedSponsorshipId,
+        sponsor: expenseForm.paidBy,
+        amount: expenseForm.amount,
+        date: new Date().toISOString().split('T')[0],
+        type: 'In-Kind',
+        note: `Self-funded expense: ${expenseForm.description} (${ev.eventName})`,
+        source: SELF_FUNDED_SOURCE,
+      })
+    }
+
     const newExp = {
       ...expenseForm,
       id: Date.now().toString(),
       totalAmount: expenseForm.amount,
+      linkedSponsorshipId,
       payments: [{ id: Date.now().toString() + '_p', amount: expenseForm.amount, date: new Date().toISOString().split('T')[0], note: 'Initial payment' }]
     }
     await saveEvent({ ...ev, expenses: [...(ev.expenses || []), newExp] })
@@ -577,6 +649,10 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
   const removeExpense = async (eventId, expId) => {
     const ev = eventLedger.find(e => e.id === eventId)
     if (!ev) return
+    const exp = (ev.expenses || []).find(x => x.id === expId)
+    if (exp?.linkedSponsorshipId && removeSponsorship) {
+      await removeSponsorship(exp.linkedSponsorshipId)
+    }
     await saveEvent({ ...ev, expenses: (ev.expenses || []).filter(x => x.id !== expId) })
   }
 
@@ -791,7 +867,14 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
                                       <svg className={`w-3.5 h-3.5 text-rotary-slate dark:text-white/30 transition-transform shrink-0 ${isExpExp ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                                       <div className="flex-1 min-w-0">
                                         <p className="text-sm font-medium truncate">{exp.description}</p>
-                                        <p className="text-xs text-rotary-slate dark:text-white/30">{exp.category}{exp.paidBy ? ` · ${exp.paidBy}` : ''}</p>
+                                        <p className="text-xs text-rotary-slate dark:text-white/30">
+                                          {exp.category}{exp.paidBy ? ` · ${exp.paidBy}` : ''}
+                                          {exp.linkedSponsorshipId && (
+                                            <span className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-400">
+                                              🎗️ Counted as sponsorship
+                                            </span>
+                                          )}
+                                        </p>
                                       </div>
                                       <div className="text-right shrink-0">
                                         <p className="text-sm font-semibold">₹{totalPaid.toLocaleString()}<span className="text-rotary-slate dark:text-white/30 font-normal"> / ₹{totalAmount.toLocaleString()}</span></p>
@@ -857,9 +940,24 @@ function EventExpenses({ eventLedger, saveEvent, removeEvent, dateRange = {}, pr
                             <select className={inputClass} value={expenseForm.category} onChange={e => setExpenseForm({ ...expenseForm, category: e.target.value })}>
                               {expenseCategories.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
-                            <input className={inputClass} placeholder="Paid by" value={expenseForm.paidBy} onChange={e => setExpenseForm({ ...expenseForm, paidBy: e.target.value })} />
+                            <select className={inputClass} value={expenseForm.paidBy} onChange={e => setExpenseForm({ ...expenseForm, paidBy: e.target.value, selfFunded: e.target.value ? expenseForm.selfFunded : false })}>
+                              <option value="">Paid by…</option>
+                              {members.slice().sort((a, b) => a.name?.localeCompare(b.name)).map(m => (
+                                <option key={m.id} value={m.name}>{m.name}</option>
+                              ))}
+                            </select>
                             <input className={inputClass} type="number" min="0" placeholder="Amount (₹) *" value={expenseForm.amount || ''} onChange={e => setExpenseForm({ ...expenseForm, amount: parseInt(e.target.value) || 0 })} />
                             <button onClick={() => addExpense(ev.id)} disabled={!expenseForm.description || !expenseForm.amount} className="px-4 py-2.5 rounded-lg bg-rotary-gold text-rotary-navy font-semibold text-sm disabled:opacity-50 hover:bg-rotary-gold-light transition-colors">+ Add</button>
+                            <label className={`col-span-2 md:col-span-5 flex items-center gap-2 text-xs mt-1 ${expenseForm.paidBy ? 'text-rotary-slate dark:text-white/50 cursor-pointer' : 'text-rotary-slate/40 dark:text-white/20 cursor-not-allowed'}`}>
+                              <input
+                                type="checkbox"
+                                checked={expenseForm.selfFunded}
+                                disabled={!expenseForm.paidBy}
+                                onChange={e => setExpenseForm({ ...expenseForm, selfFunded: e.target.checked })}
+                                className="rounded border-gray-300"
+                              />
+                              Paid by "{expenseForm.paidBy || '…'}" out of pocket — also record as a sponsorship
+                            </label>
                           </div>
                         </td>
                       </tr>
@@ -975,13 +1073,25 @@ function Sponsorships({ sponsorships, saveSponsorship, removeSponsorship, dateRa
     resetForm()
   }
 
+  // System-generated entries (write-offs, self-funded expenses) are linked
+  // to a specific transaction/expense record — editing or deleting them here
+  // directly would desync the books without updating the source record. Send
+  // people to the right place instead of letting them silently break the link.
+  const sourceRedirectMessage = (s) => s.source === WRITTEN_OFF_SOURCE
+    ? 'This entry is linked to one or more written-off transactions. Reopen those transactions from the Reimbursements tab instead.'
+    : 'This entry is linked to a self-funded event expense. Remove that expense from the Event Expenses tab instead.'
+
   const handleEdit = (s) => {
+    if (s.source) { alert(sourceRedirectMessage(s)); return }
     setForm({ sponsor: s.sponsor, amount: s.amount || 0, date: s.date || '', type: s.type || 'Cash', note: s.note || '' })
     setEditingId(s.id)
     setShowForm(true)
   }
 
-  const handleRemove = (id) => setDeleteId(id)
+  const handleRemove = (s) => {
+    if (s.source) { alert(sourceRedirectMessage(s)); return }
+    setDeleteId(s.id)
+  }
 
   const exportCSV = () => {
     const headers = ['Sponsor', 'Type', 'Date', 'Amount (₹)', 'Note']
@@ -1063,17 +1173,24 @@ function Sponsorships({ sponsorships, saveSponsorship, removeSponsorship, dateRa
             <tbody>
               {filtered.map(s => (
                 <tr key={s.id} className="border-b border-gray-50 dark:border-white/[0.03] hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors">
-                  <td className="px-5 py-3 font-medium">{s.sponsor}</td>
+                  <td className="px-5 py-3 font-medium">
+                    {s.sponsor}
+                    {s.source && (
+                      <span title={sourceRedirectMessage(s)} className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 dark:bg-white/10 text-rotary-slate dark:text-white/50 align-middle">
+                        🔗 Auto-linked
+                      </span>
+                    )}
+                  </td>
                   <td className="px-5 py-3"><span className="inline-block px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-400">{s.type}</span></td>
                   <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">{s.date ? new Date(s.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
                   <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{(s.amount || 0).toLocaleString()}</td>
                   <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/40">{s.note || '—'}</td>
                   <td className="px-5 py-3 text-right">
                     <div className="flex items-center justify-end gap-1.5">
-                      <button onClick={() => handleEdit(s)} className="w-7 h-7 rounded-lg bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-white/10 transition-colors">
+                      <button onClick={() => handleEdit(s)} className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${s.source ? 'bg-gray-50 dark:bg-white/5 text-gray-300 dark:text-white/20 cursor-not-allowed' : 'bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60 hover:bg-gray-200 dark:hover:bg-white/10'}`}>
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                       </button>
-                      <button onClick={() => handleRemove(s.id)} className="w-7 h-7 rounded-lg bg-red-50 dark:bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors">
+                      <button onClick={() => handleRemove(s)} className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${s.source ? 'bg-gray-50 dark:bg-white/5 text-gray-300 dark:text-white/20 cursor-not-allowed' : 'bg-red-50 dark:bg-red-500/10 text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20'}`}>
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                       </button>
                     </div>
@@ -1128,23 +1245,28 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], transactions = 
   const totalDues = members.reduce((s, m) => s + (m.annualDue || 0), 0)
   const totalCollected = filteredMembers.reduce((s, m) => s + (m.paid || 0), 0)
   const totalPending = totalDues - totalCollected
-  const totalSponsorships = filteredSponsorships.reduce((s, x) => s + (x.amount || 0), 0)
+  // Written-off transactions and self-funded event expenses never actually
+  // left club funds (a member covered them as a donation, already counted
+  // separately as a sponsorship), so they're excluded from real spend here —
+  // and their matching auto-generated sponsorship is excluded from income
+  // below, since no cash actually came in either.
+  const cashSponsorships = filteredSponsorships.filter(s => !isNonCashSponsorship(s)).reduce((s, x) => s + (x.amount || 0), 0)
   const totalTransactionIncome = filteredTransactions.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
-  const totalTransactionExpense = filteredTransactions.filter(t => t.type === 'Expense').reduce((s, t) => s + (t.amount || 0), 0)
+  const totalTransactionExpense = filteredTransactions.filter(t => t.type === 'Expense' && t.reimbursableStatus !== 'Written Off').reduce((s, t) => s + (t.amount || 0), 0)
 
   const eventTotals = filteredEvents.map(ev => ({
     name: ev.eventName,
     date: ev.date,
     budget: ev.budget || 0,
     income: ev.income || 0,
-    spent: (ev.expenses || []).reduce((s, x) => s + (x.amount || 0), 0),
-    breakdown: Object.entries((ev.expenses || []).reduce((acc, x) => { acc[x.category] = (acc[x.category] || 0) + (x.amount || 0); return acc }, {}))
+    spent: (ev.expenses || []).filter(x => !x.linkedSponsorshipId).reduce((s, x) => s + (x.amount || 0), 0),
+    breakdown: Object.entries((ev.expenses || []).filter(x => !x.linkedSponsorshipId).reduce((acc, x) => { acc[x.category] = (acc[x.category] || 0) + (x.amount || 0); return acc }, {}))
   }))
 
   const totalEventIncome = eventTotals.reduce((s, e) => s + e.income, 0)
   const totalEventExpenses = eventTotals.reduce((s, e) => s + e.spent, 0)
   const totalExpenses = totalEventExpenses + totalTransactionExpense
-  const totalIncome = totalCollected + totalSponsorships + totalEventIncome + totalTransactionIncome
+  const totalIncome = totalCollected + cashSponsorships + totalEventIncome + totalTransactionIncome
   const balance = totalIncome - totalExpenses
   const isPositive = balance >= 0
 
@@ -1152,7 +1274,7 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], transactions = 
     const rows = []
     rows.push(['"INCOME"', '', ''].join(','))
     rows.push(['"Membership Dues Collected"', '', totalCollected].join(','))
-    if (totalSponsorships > 0) rows.push(['"Total Sponsorships"', '', totalSponsorships].join(','))
+    if (cashSponsorships > 0) rows.push(['"Total Sponsorships (cash)"', '', cashSponsorships].join(','))
     if (totalEventIncome > 0) rows.push(['"Project Income (ticket sales etc.)"', '', totalEventIncome].join(','))
     if (totalTransactionIncome > 0) rows.push(['"Other Income (Transactions)"', '', totalTransactionIncome].join(','))
     rows.push(['"Total Income"', '', totalIncome].join(','))
@@ -1212,10 +1334,10 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], transactions = 
                 <td className="px-5 py-3"><p className="font-medium">Membership Dues</p><p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">{filteredMembers.filter(m => m.paid >= m.annualDue && m.annualDue > 0).length} paid · {filteredMembers.filter(m => m.paid > 0 && m.paid < m.annualDue).length} partial</p></td>
                 <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalCollected.toLocaleString()}</td>
               </tr>
-              {filteredSponsorships.length > 0 && (
+              {cashSponsorships > 0 && (
                 <tr className="border-b border-gray-50 dark:border-white/[0.03]">
-                  <td className="px-5 py-3"><p className="font-medium">Sponsorships</p><p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">{filteredSponsorships.length} sponsor{filteredSponsorships.length !== 1 ? 's' : ''}</p></td>
-                  <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalSponsorships.toLocaleString()}</td>
+                  <td className="px-5 py-3"><p className="font-medium">Sponsorships</p><p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">{filteredSponsorships.filter(s => !isNonCashSponsorship(s)).length} sponsor{filteredSponsorships.filter(s => !isNonCashSponsorship(s)).length !== 1 ? 's' : ''} · excludes write-offs & self-funded expenses (no cash received)</p></td>
+                  <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{cashSponsorships.toLocaleString()}</td>
                 </tr>
               )}
               {totalEventIncome > 0 && (
@@ -1290,8 +1412,11 @@ function BalanceSheet({ members, eventLedger, sponsorships = [], transactions = 
 function BudgetVsActual({ approvedBudget, saveApprovedBudget, transactions, forecast }) {
   const { budget, isFrozen, live: liveFromForecast } = resolveApprovedBudget(approvedBudget, forecast)
 
+  // Written-off expenses are excluded — the club never actually paid that
+  // money out (the member absorbed it as a donation instead, tracked as a
+  // sponsorship), so it shouldn't count against the budget as real spend.
   const actualByCategory = EXPENSE_CATEGORIES.reduce((acc, cat) => {
-    acc[cat] = transactions.filter(t => t.type === 'Expense' && t.budgetHead === cat).reduce((s, t) => s + (t.amount || 0), 0)
+    acc[cat] = transactions.filter(t => t.type === 'Expense' && t.budgetHead === cat && t.reimbursableStatus !== 'Written Off').reduce((s, t) => s + (t.amount || 0), 0)
     return acc
   }, {})
 
@@ -1629,7 +1754,7 @@ function Forecast({ forecast, saveForecast }) {
 
 // ── Transactions (General Ledger) ──
 const BUDGET_HEADS = [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES]
-const REIMBURSABLE_STATUSES = ['None', 'Pending', 'Completed']
+const REIMBURSABLE_STATUSES = ['None', 'Pending', 'Completed', 'Written Off']
 
 function generateVoucherNo(date, transactions) {
   const d = date ? new Date(date) : new Date()
@@ -1639,25 +1764,46 @@ function generateVoucherNo(date, transactions) {
   return `${prefix}${String(seq).padStart(4, '0')}`
 }
 
-function Transactions({ transactions, saveTransaction, removeTransaction, projects = [], dateRange = {} }) {
+function Transactions({ transactions, saveTransaction, removeTransaction, sponsorships = [], saveSponsorship, removeSponsorship, projects = [], dateRange = {}, members = [], currentUserName = 'Treasurer' }) {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
   const [headFilter, setHeadFilter] = useState('all')
+  const [avenueFilter, setAvenueFilter] = useState('all')
   const [modeFilter, setModeFilter] = useState('all')
   const [reimburseFilter, setReimburseFilter] = useState('all')
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [deleteId, setDeleteId] = useState(null)
-  const emptyForm = { date: new Date().toISOString().split('T')[0], voucherNo: '', type: 'Expense', budgetHead: EXPENSE_CATEGORIES[0], description: '', amount: 0, mode: 'Cash', approvedBy: 'Treasurer', paidBy: '', project: '', reimbursableStatus: 'None' }
+  const emptyForm = { date: new Date().toISOString().split('T')[0], voucherNo: '', type: 'Expense', budgetHead: EXPENSE_CATEGORIES[0], avenue: AVENUES[0], description: '', amount: 0, mode: 'Cash', approvedBy: currentUserName, paidBy: '', project: '', reimbursableStatus: 'None' }
   const [form, setForm] = useState(emptyForm)
 
   const resetForm = () => { setForm(emptyForm); setEditingId(null); setShowForm(false) }
+
+  // Keeps a transaction's linked write-off sponsorship in sync with whatever
+  // its reimbursableStatus/amount/paidBy end up being after this save —
+  // reverses the OLD contribution (if any) and applies the NEW one (if the
+  // saved status is "Written Off"), regardless of which UI path triggered
+  // the change (the guided Write Off button, or picking it straight from
+  // this form's status dropdown).
+  const syncWriteOffSponsorship = async (oldT, newT) => {
+    if (oldT?.reimbursableStatus === 'Written Off' && oldT.writtenOffSponsor) {
+      await adjustWrittenOffSponsorship({ sponsorships, saveSponsorship, removeSponsorship, sponsor: oldT.writtenOffSponsor, delta: -(oldT.writtenOffAmount || 0) })
+    }
+    if (newT.reimbursableStatus === 'Written Off') {
+      const sponsor = newT.paidBy || 'Unknown'
+      await adjustWrittenOffSponsorship({ sponsorships, saveSponsorship, removeSponsorship, sponsor, delta: newT.amount || 0 })
+      return { writtenOffSponsor: sponsor, writtenOffAmount: newT.amount || 0, writtenOffDate: newT.writtenOffDate || new Date().toISOString().split('T')[0] }
+    }
+    return { writtenOffSponsor: null, writtenOffAmount: null, writtenOffDate: null }
+  }
 
   const handleSave = async () => {
     if (!form.date || !form.amount) return
     if (!editingId) form.voucherNo = generateVoucherNo(form.date, transactions)
     const id = editingId || Date.now().toString()
-    await saveTransaction({ ...form, id, approvedBy: 'Treasurer' })
+    const oldT = editingId ? transactions.find(x => x.id === editingId) : null
+    const writeOffFields = await syncWriteOffSponsorship(oldT, form)
+    await saveTransaction({ ...form, id, approvedBy: currentUserName, ...writeOffFields })
     resetForm()
   }
 
@@ -1667,12 +1813,29 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
     setShowForm(true)
   }
 
+  // Deleting a written-off transaction must also undo its sponsorship credit
+  // — otherwise the member's aggregated write-off sponsorship survives with
+  // no corresponding transaction to justify it.
+  const handleDeleteConfirm = async (id) => {
+    try {
+      const t = transactions.find(x => x.id === id)
+      if (t?.reimbursableStatus === 'Written Off' && t.writtenOffSponsor) {
+        await adjustWrittenOffSponsorship({ sponsorships, saveSponsorship, removeSponsorship, sponsor: t.writtenOffSponsor, delta: -(t.writtenOffAmount || 0) })
+      }
+      await removeTransaction(id)
+    } catch (err) {
+      console.error('Delete transaction error:', err)
+      alert(`Delete failed: ${err.message || err}`)
+    }
+  }
+
   const { from, to } = dateRange
   const rangeFiltered = (from || to) ? transactions.filter(t => inRange(t.date, from, to)) : transactions
 
   const columnFiltered = rangeFiltered.filter(t => {
     if (typeFilter !== 'all' && t.type !== typeFilter) return false
     if (headFilter !== 'all' && t.budgetHead !== headFilter) return false
+    if (avenueFilter !== 'all' && (t.avenue || AVENUES[0]) !== avenueFilter) return false
     if (modeFilter !== 'all' && t.mode !== modeFilter) return false
     if (reimburseFilter !== 'all' && (t.reimbursableStatus || 'None') !== reimburseFilter) return false
     return true
@@ -1682,11 +1845,18 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
     ? columnFiltered.filter(t => t.description?.toLowerCase().includes(search.toLowerCase()) || t.voucherNo?.toLowerCase().includes(search.toLowerCase()))
     : columnFiltered
 
-  // Running balance computed over all transactions in chronological order (not affected by filters)
+  // Running balance computed over all transactions in chronological order (not affected by filters).
+  // Written-off expenses are skipped — the club never actually paid that
+  // money out (a member covered it as a donation, tracked separately as a
+  // sponsorship instead), so it shouldn't pull the cash balance down.
   const sortedAll = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date))
   const balanceById = {}
   let running = 0
   sortedAll.forEach(t => {
+    if (t.type === 'Expense' && t.reimbursableStatus === 'Written Off') {
+      balanceById[t.id] = running
+      return
+    }
     running += (t.type === 'Income' ? (t.amount || 0) : -(t.amount || 0))
     balanceById[t.id] = running
   })
@@ -1694,21 +1864,21 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
   const sortedFiltered = [...filtered].sort((a, b) => new Date(a.date) - new Date(b.date))
 
   const totalIncome = filtered.filter(t => t.type === 'Income').reduce((s, t) => s + (t.amount || 0), 0)
-  const totalExpense = filtered.filter(t => t.type === 'Expense').reduce((s, t) => s + (t.amount || 0), 0)
-  const activeColumnFilters = [typeFilter, headFilter, modeFilter, reimburseFilter].filter(f => f !== 'all').length
-  const resetColumnFilters = () => { setTypeFilter('all'); setHeadFilter('all'); setModeFilter('all'); setReimburseFilter('all') }
+  const totalExpense = filtered.filter(t => t.type === 'Expense' && t.reimbursableStatus !== 'Written Off').reduce((s, t) => s + (t.amount || 0), 0)
+  const activeColumnFilters = [typeFilter, headFilter, avenueFilter, modeFilter, reimburseFilter].filter(f => f !== 'all').length
+  const resetColumnFilters = () => { setTypeFilter('all'); setHeadFilter('all'); setAvenueFilter('all'); setModeFilter('all'); setReimburseFilter('all') }
 
   const exportCSV = () => {
-    const headers = ['Date', 'Voucher No', 'Type', 'Budget Head', 'Description', 'Income (₹)', 'Expense (₹)', 'Mode', 'Approved By', 'Balance (₹)', 'Paid By', 'Project', 'Reimbursable Status']
+    const headers = ['Date', 'Voucher No', 'Type', 'Budget Head', 'Avenue', 'Description', 'Income (₹)', 'Expense (₹)', 'Mode', 'Approved By', 'Balance (₹)', 'Paid By', 'Project', 'Reimbursable Status']
     const rows = sortedFiltered.map(t => [
       t.date ? new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
-      `"${t.voucherNo || ''}"`, t.type, `"${t.budgetHead || ''}"`, `"${t.description || ''}"`,
+      `"${t.voucherNo || ''}"`, t.type, `"${t.budgetHead || ''}"`, `"${t.avenue || AVENUES[0]}"`, `"${t.description || ''}"`,
       t.type === 'Income' ? (t.amount || 0) : 0,
       t.type === 'Expense' ? (t.amount || 0) : 0,
       t.mode || '', `"${t.approvedBy || 'Treasurer'}"`, balanceById[t.id] ?? 0,
       `"${t.paidBy || ''}"`, `"${t.project || ''}"`, t.reimbursableStatus || 'None'
     ].join(','))
-    rows.push(['', '', '', '', '"TOTAL"', totalIncome, totalExpense, '', '', '', '', '', ''].join(','))
+    rows.push(['', '', '', '', '', '"TOTAL"', totalIncome, totalExpense, '', '', '', '', '', ''].join(','))
     const csv = '﻿' + [headers.join(','), ...rows].join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -1782,6 +1952,12 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
                   {(form.type === 'Income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(h => <option key={h} value={h}>{h}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Avenue</label>
+                <select className={inputClass} value={form.avenue || AVENUES[0]} onChange={e => setForm({ ...form, avenue: e.target.value })}>
+                  {AVENUES.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </div>
               <div className="col-span-2 md:col-span-2">
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Description</label>
                 <input className={inputClass} placeholder="What is this for?" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
@@ -1798,11 +1974,16 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
               </div>
               <div>
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Approved By</label>
-                <input className={`${inputClass} !bg-gray-100 dark:!bg-white/5 !text-rotary-slate dark:!text-white/40 cursor-not-allowed`} value="Treasurer" readOnly disabled />
+                <input className={`${inputClass} !bg-gray-100 dark:!bg-white/5 !text-rotary-slate dark:!text-white/40 cursor-not-allowed`} value={currentUserName} readOnly disabled />
               </div>
               <div>
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Paid By</label>
-                <input className={inputClass} value={form.paidBy} onChange={e => setForm({ ...form, paidBy: e.target.value })} />
+                <select className={inputClass} value={form.paidBy} onChange={e => setForm({ ...form, paidBy: e.target.value })}>
+                  <option value="">— None —</option>
+                  {members.slice().sort((a, b) => a.name?.localeCompare(b.name)).map(m => (
+                    <option key={m.id} value={m.name}>{m.name}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Project</label>
@@ -1844,6 +2025,13 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
           </select>
         </div>
         <div>
+          <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Avenue</label>
+          <select className={`${inputClass} !w-auto !py-2`} value={avenueFilter} onChange={e => setAvenueFilter(e.target.value)}>
+            <option value="all">All Avenues</option>
+            {AVENUES.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
+        <div>
           <label className="text-[10px] uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold block mb-1">Mode</label>
           <select className={`${inputClass} !w-auto !py-2`} value={modeFilter} onChange={e => setModeFilter(e.target.value)}>
             <option value="all">All Modes</option>
@@ -1869,20 +2057,21 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 dark:border-white/5">
-                <th className="sticky left-0 z-10 bg-gray-50 dark:bg-rotary-navy-light text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Date</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Voucher No</th>
-                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Type</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Budget Head</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Description</th>
-                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Income</th>
-                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Expense</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Mode</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Approved By</th>
-                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Balance</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Paid By</th>
-                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Project</th>
-                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Reimbursable</th>
-                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Actions</th>
+                <th className="sticky left-0 z-10 bg-gray-50 dark:bg-rotary-navy-light text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Date</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Voucher No</th>
+                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Type</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Budget Head</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Avenue</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Description</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Income</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Expense</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Mode</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Approved By</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Balance</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Paid By</th>
+                <th className="text-left px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Project</th>
+                <th className="text-center px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Reimbursable</th>
+                <th className="text-right px-5 py-3 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1896,7 +2085,12 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
                     <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${t.type === 'Income' ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'}`}>{t.type}</span>
                   </td>
                   <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.budgetHead || '—'}</td>
-                  <td className="px-5 py-3">{t.description || '—'}</td>
+                  <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50 whitespace-nowrap">
+                    {t.avenue && t.avenue !== AVENUES[0] ? (
+                      <span className="inline-block px-2 py-0.5 rounded-full bg-rotary-blue/10 dark:bg-rotary-blue/20 text-rotary-blue dark:text-white font-medium whitespace-nowrap">{t.avenue}</span>
+                    ) : '—'}
+                  </td>
+                  <td className="px-5 py-3 min-w-[180px]">{t.description || '—'}</td>
                   <td className="px-5 py-3 text-right text-green-600 dark:text-green-400">{t.type === 'Income' ? `₹${(t.amount || 0).toLocaleString()}` : '—'}</td>
                   <td className="px-5 py-3 text-right text-red-500">{t.type === 'Expense' ? `₹${(t.amount || 0).toLocaleString()}` : '—'}</td>
                   <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">
@@ -1928,13 +2122,13 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
                 </tr>
               ))}
               {sortedFiltered.length === 0 && (
-                <tr><td colSpan={14} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No transactions yet. Add one above.</td></tr>
+                <tr><td colSpan={15} className="px-5 py-10 text-center text-rotary-slate dark:text-white/30">No transactions yet. Add one above.</td></tr>
               )}
             </tbody>
             {sortedFiltered.length > 0 && (
               <tfoot>
                 <tr className="border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02]">
-                  <td className="px-5 py-3 font-semibold" colSpan={5}>Total ({sortedFiltered.length})</td>
+                  <td className="px-5 py-3 font-semibold" colSpan={6}>Total ({sortedFiltered.length})</td>
                   <td className="px-5 py-3 text-right font-semibold text-green-600 dark:text-green-400">₹{totalIncome.toLocaleString()}</td>
                   <td className="px-5 py-3 text-right font-semibold text-red-500">₹{totalExpense.toLocaleString()}</td>
                   <td colSpan={7}></td>
@@ -1959,7 +2153,7 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
               <p className="text-sm text-gray-400 dark:text-white/50 mb-6">This will permanently remove this transaction record.</p>
               <div className="flex gap-3">
                 <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-white/10 text-sm font-semibold hover:bg-gray-50 transition-colors">Cancel</button>
-                <button onClick={async () => { await removeTransaction(deleteId); setDeleteId(null) }} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">Remove</button>
+                <button onClick={async () => { await handleDeleteConfirm(deleteId); setDeleteId(null) }} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">Remove</button>
               </div>
             </motion.div>
           </motion.div>
@@ -1970,7 +2164,7 @@ function Transactions({ transactions, saveTransaction, removeTransaction, projec
 }
 
 // ── Reimbursements ──
-function Reimbursements({ transactions, saveTransaction, dateRange = {} }) {
+function Reimbursements({ transactions, saveTransaction, sponsorships = [], saveSponsorship, removeSponsorship, dateRange = {} }) {
   const [statusFilter, setStatusFilter] = useState('Pending')
 
   const reimbursable = transactions.filter(t => t.reimbursableStatus && t.reimbursableStatus !== 'None')
@@ -1981,6 +2175,7 @@ function Reimbursements({ transactions, saveTransaction, dateRange = {} }) {
     all: rangeFiltered.length,
     Pending: rangeFiltered.filter(t => t.reimbursableStatus === 'Pending').length,
     Completed: rangeFiltered.filter(t => t.reimbursableStatus === 'Completed').length,
+    'Written Off': rangeFiltered.filter(t => t.reimbursableStatus === 'Written Off').length,
   }
 
   const filtered = statusFilter === 'all' ? rangeFiltered : rangeFiltered.filter(t => t.reimbursableStatus === statusFilter)
@@ -1988,12 +2183,42 @@ function Reimbursements({ transactions, saveTransaction, dateRange = {} }) {
 
   const totalPending = rangeFiltered.filter(t => t.reimbursableStatus === 'Pending').reduce((s, t) => s + (t.amount || 0), 0)
   const totalCompleted = rangeFiltered.filter(t => t.reimbursableStatus === 'Completed').reduce((s, t) => s + (t.amount || 0), 0)
+  const totalWrittenOff = rangeFiltered.filter(t => t.reimbursableStatus === 'Written Off').reduce((s, t) => s + (t.amount || 0), 0)
 
   const markReimbursed = async (t) => {
     await saveTransaction({ ...t, reimbursableStatus: 'Completed', reimbursedDate: new Date().toISOString().split('T')[0] })
   }
+
+  // Reopening a written-off transaction must undo its sponsorship credit —
+  // otherwise the member's aggregated write-off sponsorship stays inflated
+  // forever even though the club is now (again) on the hook to pay them back.
   const markPending = async (t) => {
-    await saveTransaction({ ...t, reimbursableStatus: 'Pending', reimbursedDate: '' })
+    try {
+      if (t.reimbursableStatus === 'Written Off' && t.writtenOffSponsor) {
+        await adjustWrittenOffSponsorship({ sponsorships, saveSponsorship, removeSponsorship, sponsor: t.writtenOffSponsor, delta: -(t.writtenOffAmount || 0) })
+      }
+      await saveTransaction({ ...t, reimbursableStatus: 'Pending', reimbursedDate: '', writtenOffAmount: null, writtenOffSponsor: null, writtenOffDate: null })
+    } catch (err) {
+      console.error('Reopen error:', err)
+      alert(`Reopen failed: ${err.message || err}`)
+    }
+  }
+
+  // Write off a pending reimbursement — the club decides not to pay the
+  // member back, so it's effectively a donation from them instead. Pile all
+  // of a given member's write-offs into a single sponsorship entry (rather
+  // than one row per write-off) so Sponsorships stays readable. The sponsor
+  // name and amount are snapshotted onto the transaction itself so this can
+  // be reversed later even if "Paid By" gets edited afterward.
+  const writeOff = async (t) => {
+    try {
+      const sponsorName = t.paidBy || 'Unknown'
+      await adjustWrittenOffSponsorship({ sponsorships, saveSponsorship, removeSponsorship, sponsor: sponsorName, delta: t.amount || 0 })
+      await saveTransaction({ ...t, reimbursableStatus: 'Written Off', writtenOffDate: new Date().toISOString().split('T')[0], writtenOffSponsor: sponsorName, writtenOffAmount: t.amount || 0 })
+    } catch (err) {
+      console.error('Write off error:', err)
+      alert(`Write off failed: ${err.message || err}`)
+    }
   }
 
   return (
@@ -2003,7 +2228,7 @@ function Reimbursements({ transactions, saveTransaction, dateRange = {} }) {
         <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">Money owed back to members who paid for club expenses out of pocket</p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
         <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
           <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Pending</p>
           <p className="text-xl font-display font-bold text-amber-600 dark:text-amber-400">₹{totalPending.toLocaleString()}</p>
@@ -2012,12 +2237,17 @@ function Reimbursements({ transactions, saveTransaction, dateRange = {} }) {
           <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Reimbursed</p>
           <p className="text-xl font-display font-bold text-green-600 dark:text-green-400">₹{totalCompleted.toLocaleString()}</p>
         </div>
+        <div className="bg-white dark:bg-rotary-navy-light rounded-xl p-4 border border-gray-100 dark:border-white/5">
+          <p className="text-xs text-rotary-slate dark:text-white/40 uppercase tracking-wider font-medium mb-1">Written Off</p>
+          <p className="text-xl font-display font-bold text-purple-600 dark:text-purple-400">₹{totalWrittenOff.toLocaleString()}</p>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2 mb-6">
         {[
           { key: 'Pending', label: 'Pending', color: 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400', active: 'bg-amber-500 text-white' },
           { key: 'Completed', label: 'Reimbursed', color: 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400', active: 'bg-green-600 text-white' },
+          { key: 'Written Off', label: 'Written Off', color: 'bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-400', active: 'bg-purple-600 text-white' },
           { key: 'all', label: 'All', color: 'bg-gray-100 dark:bg-white/5 text-rotary-charcoal dark:text-white/60', active: 'bg-rotary-blue text-white' },
         ].map(({ key, label, color, active }) => (
           <button
@@ -2060,15 +2290,22 @@ function Reimbursements({ transactions, saveTransaction, dateRange = {} }) {
                   <td className="px-5 py-3 text-xs text-rotary-slate dark:text-white/50">{t.budgetHead || '—'}</td>
                   <td className="px-5 py-3 text-right font-semibold">₹{(t.amount || 0).toLocaleString()}</td>
                   <td className="px-5 py-3 text-center">
-                    <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${t.reimbursableStatus === 'Completed' ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400'}`}>
-                      {t.reimbursableStatus === 'Completed' ? 'Reimbursed' : 'Pending'}
+                    <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${
+                      t.reimbursableStatus === 'Completed' ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400'
+                      : t.reimbursableStatus === 'Written Off' ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-400'
+                      : 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                    }`}>
+                      {t.reimbursableStatus === 'Completed' ? 'Reimbursed' : t.reimbursableStatus === 'Written Off' ? 'Written Off' : 'Pending'}
                     </span>
                   </td>
                   <td className="px-5 py-3 text-right">
-                    {t.reimbursableStatus === 'Completed' ? (
+                    {t.reimbursableStatus === 'Completed' || t.reimbursableStatus === 'Written Off' ? (
                       <button onClick={() => markPending(t)} className="text-xs font-medium text-rotary-slate dark:text-white/40 hover:underline">Reopen</button>
                     ) : (
-                      <button onClick={() => markReimbursed(t)} className="px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-semibold hover:bg-green-700 transition-colors">Mark Reimbursed</button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button onClick={() => writeOff(t)} title="Member won't be paid back — count it as a sponsorship instead" className="px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-400 text-xs font-semibold hover:bg-purple-100 dark:hover:bg-purple-500/20 transition-colors">Write Off</button>
+                        <button onClick={() => markReimbursed(t)} className="px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-semibold hover:bg-green-700 transition-colors">Mark Reimbursed</button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -2112,7 +2349,8 @@ function Assets({ assets, saveAsset, removeAsset }) {
   }
 
   const filtered = search ? assets.filter(a => a.name.toLowerCase().includes(search.toLowerCase())) : assets
-  const totalValue = assets.reduce((s, a) => s + (a.value || 0) * (a.quantity || 1), 0)
+  // Disposed assets shouldn't count toward current inventory value.
+  const totalValue = assets.filter(a => a.condition !== 'Disposed').reduce((s, a) => s + (a.value || 0) * (a.quantity || 1), 0)
   const activeCount = assets.filter(a => a.condition !== 'Disposed').length
 
   return (
@@ -2272,7 +2510,8 @@ function Assets({ assets, saveAsset, removeAsset }) {
 }
 
 // ── Main Dashboard ──
-export default function TreasurerDashboard({ onBack, isAdmin }) {
+export default function TreasurerDashboard({ onBack, isAdmin, permissions, readOnly = false, onNavigate }) {
+  const currentUserName = permissions?.name || permissions?.email || 'Treasurer'
   if (!isAdmin) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-rotary-navy">
       <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-500/10 flex items-center justify-center mb-4">
@@ -2392,14 +2631,25 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
           </div>
         ) : (
           <>
+            {readOnly && (
+              <div className="sticky top-20 z-10 mb-6 px-4 py-3 rounded-xl bg-rotary-gold/10 border border-rotary-gold/30 text-sm font-medium text-rotary-gold">
+                View only — you don't have edit access to the Finance Dashboard.
+              </div>
+            )}
             <SummaryCards members={members} events={eventLedger} sponsorships={sponsorships} transactions={transactions} dateRange={dateRange} />
+
+            <div className="mb-8">
+              <FundraisingSummaryCard onOpen={onNavigate ? () => onNavigate('fundraising') : undefined} />
+            </div>
 
             <div className="mb-8 bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 p-5">
               <div className="flex items-center justify-between mb-1">
                 <h3 className="font-display font-semibold text-sm">Standard Annual Dues</h3>
-                <button onClick={() => setShowRateEdit(!showRateEdit)} className="text-xs font-medium text-rotary-blue hover:underline">{showRateEdit ? 'Done' : 'Edit Rates'}</button>
+                {!readOnly && (
+                  <button onClick={() => setShowRateEdit(!showRateEdit)} className="text-xs font-medium text-rotary-blue hover:underline">{showRateEdit ? 'Done' : 'Edit Rates'}</button>
+                )}
               </div>
-              {showRateEdit ? (
+              {showRateEdit && !readOnly ? (
                 <div className="grid grid-cols-2 gap-4 mt-3">
                   <div>
                     <label className="text-xs text-rotary-slate dark:text-white/40 block mb-1">Student (₹/year)</label>
@@ -2430,25 +2680,27 @@ export default function TreasurerDashboard({ onBack, isAdmin }) {
 
             <DateRangeFilter dateRange={dateRange} setDateRange={setDateRange} />
 
-            <div className="flex overflow-x-auto gap-2 mb-8 border-b border-gray-100 dark:border-white/5 pb-px">
+            <div className="flex overflow-x-auto gap-1.5 mb-8 border-b border-gray-100 dark:border-white/5 pb-3 -mx-1 px-1">
               {tabs.map(tab => (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-5 py-3 text-sm font-medium rounded-t-lg transition-colors ${activeTab === tab.id ? 'bg-white dark:bg-rotary-navy-light border border-gray-100 dark:border-white/5 border-b-white dark:border-b-rotary-navy-light -mb-px text-rotary-blue' : 'text-rotary-slate dark:text-white/40 hover:text-rotary-charcoal dark:hover:text-white/60'}`}>
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={tab.icon} /></svg>
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`shrink-0 flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl whitespace-nowrap transition-colors ${activeTab === tab.id ? 'bg-white dark:bg-rotary-navy-light border border-rotary-blue/40 shadow-sm text-rotary-blue' : 'border border-transparent text-rotary-slate dark:text-white/40 hover:text-rotary-charcoal dark:hover:text-white/60 hover:bg-gray-100/70 dark:hover:bg-white/5'}`}>
+                  <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={tab.icon} /></svg>
                   {tab.label}
                 </button>
               ))}
             </div>
 
-            {activeTab === 'report' && <TreasurerReports members={members} leaders={leaders} transactions={transactions} forecast={forecast} approvedBudget={approvedBudget} />}
-            {activeTab === 'dues' && <MembersDues members={members} leaders={leaders} saveMember={saveMember} removeMember={removeMember} dateRange={dateRange} />}
-            {activeTab === 'transactions' && <Transactions transactions={transactions} saveTransaction={saveTransaction} removeTransaction={removeTransaction} projects={projects} dateRange={dateRange} />}
-            {activeTab === 'expenses' && <EventExpenses eventLedger={eventLedger} saveEvent={saveEvent} removeEvent={removeEvent} dateRange={dateRange} projects={projects} />}
-            {activeTab === 'sponsorships' && <Sponsorships sponsorships={sponsorships} saveSponsorship={saveSponsorship} removeSponsorship={removeSponsorship} dateRange={dateRange} />}
-            {activeTab === 'balance' && <BalanceSheet members={members} eventLedger={eventLedger} sponsorships={sponsorships} transactions={transactions} dateRange={dateRange} />}
-            {activeTab === 'budgetActual' && <BudgetVsActual approvedBudget={approvedBudget} saveApprovedBudget={saveApprovedBudget} transactions={transactions} forecast={forecast} />}
-            {activeTab === 'reimbursements' && <Reimbursements transactions={transactions} saveTransaction={saveTransaction} dateRange={dateRange} />}
-            {activeTab === 'assets' && <Assets assets={assets} saveAsset={saveAsset} removeAsset={removeAsset} />}
-            {activeTab === 'forecast' && <Forecast forecast={forecast} saveForecast={saveForecast} />}
+            <div className={readOnly ? 'pointer-events-none select-none opacity-75' : ''}>
+              {activeTab === 'report' && <TreasurerReports members={members} leaders={leaders} transactions={transactions} eventLedger={eventLedger} sponsorships={sponsorships} forecast={forecast} approvedBudget={approvedBudget} dateRange={dateRange} />}
+              {activeTab === 'dues' && <MembersDues members={members} leaders={leaders} saveMember={saveMember} removeMember={removeMember} dateRange={dateRange} />}
+              {activeTab === 'transactions' && <Transactions transactions={transactions} saveTransaction={saveTransaction} removeTransaction={removeTransaction} sponsorships={sponsorships} saveSponsorship={saveSponsorship} removeSponsorship={removeSponsorship} projects={projects} dateRange={dateRange} members={members} currentUserName={currentUserName} />}
+              {activeTab === 'expenses' && <EventExpenses eventLedger={eventLedger} saveEvent={saveEvent} removeEvent={removeEvent} saveSponsorship={saveSponsorship} removeSponsorship={removeSponsorship} dateRange={dateRange} projects={projects} members={members} />}
+              {activeTab === 'sponsorships' && <Sponsorships sponsorships={sponsorships} saveSponsorship={saveSponsorship} removeSponsorship={removeSponsorship} dateRange={dateRange} />}
+              {activeTab === 'balance' && <BalanceSheet members={members} eventLedger={eventLedger} sponsorships={sponsorships} transactions={transactions} dateRange={dateRange} />}
+              {activeTab === 'budgetActual' && <BudgetVsActual approvedBudget={approvedBudget} saveApprovedBudget={saveApprovedBudget} transactions={transactions} forecast={forecast} />}
+              {activeTab === 'reimbursements' && <Reimbursements transactions={transactions} saveTransaction={saveTransaction} sponsorships={sponsorships} saveSponsorship={saveSponsorship} removeSponsorship={removeSponsorship} dateRange={dateRange} />}
+              {activeTab === 'assets' && <Assets assets={assets} saveAsset={saveAsset} removeAsset={removeAsset} />}
+              {activeTab === 'forecast' && <Forecast forecast={forecast} saveForecast={saveForecast} />}
+            </div>
           </>
         )}
       </div>

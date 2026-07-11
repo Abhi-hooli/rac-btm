@@ -5,6 +5,7 @@ import Navbar from './components/layout/Navbar'
 import ScrollProgress from './components/ui/ScrollProgress'
 import { subscribeAuthState, firebaseAdminLogout } from './firebase'
 import { logAction } from './utils/auditLog'
+import { sweepAllExpired } from './utils/trash'
 import { useSEO } from './hooks/useSEO'
 import MaintenancePage from './components/sections/MaintenancePage'
 import { useDocument } from './hooks/useFirestore'
@@ -41,6 +42,11 @@ const UserManagement = lazy(() => import('./components/sections/UserManagement')
 const RedirectResolver = lazy(() => import('./components/sections/RedirectResolver'))
 const MembershipForm = lazy(() => import('./components/sections/MembershipForm'))
 const MembershipAdmin = lazy(() => import('./components/sections/MembershipAdmin'))
+const AvenueProjects = lazy(() => import('./components/sections/AvenueProjects'))
+const ActiveProjects = lazy(() => import('./components/sections/ActiveProjects'))
+const FundraisingTracker = lazy(() => import('./components/sections/FundraisingTracker'))
+const Profile = lazy(() => import('./components/sections/Profile'))
+const TrashBin = lazy(() => import('./components/sections/TrashBin'))
 
 
 const SectionLoader = () => (
@@ -68,6 +74,7 @@ const [isAdmin, setIsAdmin] = useState(() => !!sessionStorage.getItem('adminPerm
     return saved ? JSON.parse(saved) : null
   })
   const [currentPage, setCurrentPage] = useState('home')
+  const [pageParams, setPageParams] = useState(null)
   const [momLinkedMeeting, setMomLinkedMeeting] = useState(null)
   const [redirectSlug, setRedirectSlug] = useState(null)
   const { data: siteSettings, save: saveSiteSettings } = useDocument('settings', 'site', { maintenanceMode: false }, { live: isAdmin })
@@ -116,7 +123,7 @@ useEffect(() => {
     return () => { cancelled = true; if (unsub) unsub() }
   }, [])
 
-  // ── Auto-logout after 30 minutes ──
+  // ── Auto-logout after 1 hour ──
   useEffect(() => {
     if (!isAdmin) return
     const loginTime = sessionStorage.getItem('adminLoginTime')
@@ -125,7 +132,7 @@ useEffect(() => {
       return
     }
     const elapsed = Date.now() - parseInt(loginTime)
-    const sessionLimit = 0.5 * 60 * 60 * 1000
+    const sessionLimit = 1 * 60 * 60 * 1000
     if (elapsed >= sessionLimit) {
       // Session expired — force logout
       firebaseAdminLogout()
@@ -143,7 +150,7 @@ useEffect(() => {
       setPermissions(null)
       sessionStorage.clear()
       goToPage('home')
-      alert('Your admin session has expired after 30 minutes. Please log in again.')
+      alert('Your admin session has expired after 1 hour. Please log in again.')
     }, remaining)
     return () => clearTimeout(timer)
   }, [isAdmin])
@@ -181,6 +188,10 @@ useEffect(() => {
         '/link-redirects': 'linkRedirects',
         '/join': 'joinForm',
         '/membership-admin': 'membershipAdmin',
+        '/avenue-projects': 'avenueProjects',
+        '/active-projects': 'activeProjects',
+        '/fundraising': 'fundraising',
+        '/profile': 'profile',
       }
       const page = pathMap[path]
       if (page) setCurrentPage(page)
@@ -190,8 +201,9 @@ useEffect(() => {
     return () => window.removeEventListener('popstate', routeFromPath)
   }, [])
 
-  const goToPage = (page) => {
+  const goToPage = (page, params = null) => {
     setCurrentPage(page)
+    setPageParams(params)
 
     const routes = {
       home: '/',
@@ -214,6 +226,10 @@ useEffect(() => {
       linkRedirects: '/link-redirects',
       joinForm: '/join',
       membershipAdmin: '/membership-admin',
+      avenueProjects: '/avenue-projects',
+      activeProjects: '/active-projects',
+      fundraising: '/fundraising',
+      profile: '/profile',
     }
 
     window.history.pushState({}, '', routes[page] || '/')
@@ -254,6 +270,7 @@ useEffect(() => {
             item:    'Admin Session',
             details: `Logged in via maintenance page at ${new Date().toLocaleString('en-IN')}`,
           })
+          if (perms?.isSuperAdmin) sweepAllExpired()
         }} />
       )}
 
@@ -279,6 +296,7 @@ useEffect(() => {
                 item:    'Admin Session',
                 details: `Logged in at ${new Date().toLocaleString('en-IN')}`,
               })
+              if (perms?.isSuperAdmin) sweepAllExpired()
             }}
             onLogout={async () => {
               logAction({
@@ -309,7 +327,12 @@ useEffect(() => {
             onUserManagement={() => goToPage('users')}
             onLinkRedirects={() => goToPage('linkRedirects')}
             onMembershipAdmin={() => goToPage('membershipAdmin')}
+            onAvenueProjects={() => goToPage('avenueProjects')}
+            onActiveProjects={() => goToPage('activeProjects')}
+            onFundraising={() => goToPage('fundraising')}
+            onProfile={() => goToPage('profile')}
             onJoin={() => goToPage('joinForm')}
+            onTrash={() => goToPage('trash')}
           />
 
           <main>
@@ -369,20 +392,21 @@ useEffect(() => {
               )}
 
               {/* ── Treasurer ── */}
-              {currentPage === 'treasurer' && !permissions?.treasurer && goToPage('home')}
-              {currentPage === 'treasurer' && permissions?.treasurer && (
+              {currentPage === 'treasurer' && !(permissions?.treasurer || permissions?.viewAll) && goToPage('home')}
+              {currentPage === 'treasurer' && (permissions?.treasurer || permissions?.viewAll) && (
                 <>
-                  <TreasurerDashboard isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <TreasurerDashboard isAdmin={isAdmin} permissions={permissions} readOnly={!(permissions?.isSuperAdmin || permissions?.treasurer)} onBack={() => goToPage('home')} onNavigate={goToPage} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
 
-              {currentPage === 'attendance' && !permissions?.attendance && goToPage('home')}
+              {currentPage === 'attendance' && !(permissions?.attendance || permissions?.viewAll) && goToPage('home')}
               {/* ── Attendance Tracker ── */}
-              {currentPage === 'attendance' && permissions?.attendance && (
+              {currentPage === 'attendance' && (permissions?.attendance || permissions?.viewAll) && (
                 <>
                   <AttendanceTracker
                     isAdmin={isAdmin}
+                    readOnly={!(permissions?.isSuperAdmin || permissions?.attendance)}
                     onBack={() => goToPage('home')}
                     onCreateMom={(meeting) => {
                       setMomLinkedMeeting(meeting)
@@ -393,12 +417,14 @@ useEffect(() => {
                 </>
               )}
 
-              {currentPage === 'mom' && !permissions?.mom && goToPage('home')}
+              {currentPage === 'mom' && !(permissions?.mom || permissions?.viewAll) && goToPage('home')}
               {/* ── MoM Tracker ── */}
-              {currentPage === 'mom' && permissions?.mom && (
+              {currentPage === 'mom' && (permissions?.mom || permissions?.viewAll) && (
                 <>
                   <MomTracker
                     isAdmin={isAdmin}
+                    permissions={permissions}
+                    readOnly={!(permissions?.isSuperAdmin || permissions?.mom)}
                     onBack={() => { setMomLinkedMeeting(null); goToPage('home') }}
                     linkedMeeting={momLinkedMeeting}
                   />
@@ -422,12 +448,14 @@ useEffect(() => {
                 </>
               )}
 
-              {currentPage === 'analytics' && !permissions?.analytics && goToPage('home')}
+              {currentPage === 'analytics' && !(permissions?.analytics || permissions?.viewAll) && goToPage('home')}
               {/* ── Analytics ── */}
-              {currentPage === 'analytics' && permissions?.analytics && (
+              {currentPage === 'analytics' && (permissions?.analytics || permissions?.viewAll) && (
                 <>
                   <ClubAnalyticsDashboard
                     isAdmin={isAdmin}
+                    permissions={permissions}
+                    readOnly={!(permissions?.isSuperAdmin || permissions?.analytics)}
                     onBack={() => goToPage('home')}
                   />
                   <Footer goToPage={goToPage} />
@@ -445,20 +473,20 @@ useEffect(() => {
                 </>
               )}
 
-              {currentPage === 'users' && !permissions?.userManagement && goToPage('home')}
+              {currentPage === 'users' && !(permissions?.userManagement || permissions?.viewAll) && goToPage('home')}
               {/* ── User Management ── */}
-              {currentPage === 'users' && permissions?.userManagement && (
+              {currentPage === 'users' && (permissions?.userManagement || permissions?.viewAll) && (
                 <>
-                  <UserManagement onBack={() => goToPage('home')} />
+                  <UserManagement isAdmin={isAdmin} permissions={permissions} readOnly={!(permissions?.isSuperAdmin || permissions?.userManagement)} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
 
-              {currentPage === 'rsvpAdmin' && !permissions?.rsvp && goToPage('home')}
+              {currentPage === 'rsvpAdmin' && !(permissions?.rsvp || permissions?.viewAll) && goToPage('home')}
               {/* ── RSVP Admin ── */}
-              {currentPage === 'rsvpAdmin' && permissions?.rsvp && (
+              {currentPage === 'rsvpAdmin' && (permissions?.rsvp || permissions?.viewAll) && (
                 <>
-                  <EventRsvpAdmin isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <EventRsvpAdmin isAdmin={isAdmin} readOnly={!(permissions?.isSuperAdmin || permissions?.rsvp)} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
@@ -488,20 +516,65 @@ useEffect(() => {
                 </>
               )}
 
-              {currentPage === 'linkRedirects' && !permissions?.linkRedirects && goToPage('home')}
+              {currentPage === 'linkRedirects' && !(permissions?.linkRedirects || permissions?.viewAll) && goToPage('home')}
               {/* ── Link Redirects ── */}
-              {currentPage === 'linkRedirects' && permissions?.linkRedirects && (
+              {currentPage === 'linkRedirects' && (permissions?.linkRedirects || permissions?.viewAll) && (
                 <>
-                  <LinkRedirects onBack={() => goToPage('home')} />
+                  <LinkRedirects isAdmin={isAdmin} readOnly={!(permissions?.isSuperAdmin || permissions?.linkRedirects)} onBack={() => goToPage('home')} />
                   <Footer goToPage={goToPage} />
                 </>
               )}
 
-              {currentPage === 'membershipAdmin' && !permissions?.membership && goToPage('home')}
+              {currentPage === 'membershipAdmin' && !(permissions?.membership || permissions?.viewAll) && goToPage('home')}
               {/* ── Membership Applications ── */}
-              {currentPage === 'membershipAdmin' && permissions?.membership && (
+              {currentPage === 'membershipAdmin' && (permissions?.membership || permissions?.viewAll) && (
                 <>
-                  <MembershipAdmin isAdmin={isAdmin} onBack={() => goToPage('home')} />
+                  <MembershipAdmin isAdmin={isAdmin} permissions={permissions} readOnly={!(permissions?.isSuperAdmin || permissions?.membership)} initialStatusFilter={pageParams?.statusFilter} initialAssigneeFilter={pageParams?.assigneeFilter} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {currentPage === 'avenueProjects' && !(permissions?.avenueProjects || permissions?.avenueProjectsApprove || permissions?.viewAll) && goToPage('home')}
+              {/* ── Avenue Project Planning ── */}
+              {currentPage === 'avenueProjects' && (permissions?.avenueProjects || permissions?.avenueProjectsApprove || permissions?.viewAll) && (
+                <>
+                  <AvenueProjects isAdmin={isAdmin} permissions={permissions} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {currentPage === 'activeProjects' && !(permissions?.avenueProjects || permissions?.avenueProjectsApprove || permissions?.treasurer || permissions?.viewAll) && goToPage('home')}
+              {/* ── Active Projects (execution workspace) ── */}
+              {currentPage === 'activeProjects' && (permissions?.avenueProjects || permissions?.avenueProjectsApprove || permissions?.treasurer || permissions?.viewAll) && (
+                <>
+                  <ActiveProjects isAdmin={isAdmin} permissions={permissions} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {currentPage === 'fundraising' && !(permissions?.treasurer || permissions?.avenueProjectsApprove || permissions?.viewAll) && goToPage('home')}
+              {/* ── Fundraising Tracker ── */}
+              {currentPage === 'fundraising' && (permissions?.treasurer || permissions?.avenueProjectsApprove || permissions?.viewAll) && (
+                <>
+                  <FundraisingTracker isAdmin={isAdmin} permissions={permissions} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {currentPage === 'trash' && !permissions?.isSuperAdmin && goToPage('home')}
+              {/* ── Trash (super admin only) ── */}
+              {currentPage === 'trash' && permissions?.isSuperAdmin && (
+                <>
+                  <TrashBin permissions={permissions} onBack={() => goToPage('home')} />
+                  <Footer goToPage={goToPage} />
+                </>
+              )}
+
+              {currentPage === 'profile' && !isAdmin && goToPage('home')}
+              {/* ── Profile ── */}
+              {currentPage === 'profile' && isAdmin && (
+                <>
+                  <Profile permissions={permissions} onBack={() => goToPage('home')} onNavigate={goToPage} />
                   <Footer goToPage={goToPage} />
                 </>
               )}

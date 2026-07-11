@@ -3,6 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion'
 import * as XLSX from 'xlsx'
 import { useCollection } from '../../hooks/useFirestore'
 import { teamCategories, memberTypes, inputClass, LeaderCard } from './Leadership'
+import { AVENUES } from './treasurerShared'
+
+const DIRECTOR_AVENUES = [...AVENUES.filter(a => a !== 'Not Applicable'), 'Membership']
 
 function storableDate(val) {
   if (!val) return ''
@@ -47,6 +50,7 @@ function ImportModal({ onClose, onImport }) {
         const annCol = findCol('anniversary', 'anni', 'wedding')
         const teamCol = findCol('team', 'group', 'category')
         const typeCol = findCol('type', 'membertype', 'student', 'working')
+        const emailCol = findCol('email', 'mail')
 
         if (!nameCol) { setError('Could not find a "Name" column.'); return }
 
@@ -66,11 +70,12 @@ function ImportModal({ onClose, onImport }) {
             : 'student',
           birthday: bdayCol ? storableDate(row[bdayCol]) : '',
           anniversary: annCol ? storableDate(row[annCol]) : '',
+          email: emailCol ? String(row[emailCol] || '').trim() : '',
           image: '',
           linkedin: ''
         })).filter(r => r.name)
 
-        setPreview({ parsed, cols: { nameCol, roleCol, bdayCol, annCol } })
+        setPreview({ parsed, cols: { nameCol, roleCol, bdayCol, annCol, emailCol } })
       } catch { setError('Failed to parse file.') }
     }
     reader.readAsArrayBuffer(file)
@@ -86,9 +91,9 @@ function ImportModal({ onClose, onImport }) {
 
   const downloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Name', 'Role', 'Team (bod/core/member)', 'Member Type (student/working)', 'Birthday (DD/MM/YYYY)', 'Anniversary (DD/MM/YYYY)'],
-      ['Rtr. John Doe', 'President', 'bod', 'working', '15/08/1998', ''],
-      ['Rtr. Jane Smith', 'Secretary', 'core', 'student', '22/12/2000', '20/03/2023'],
+      ['Name', 'Role', 'Team (bod/core/member)', 'Member Type (student/working)', 'Birthday (DD/MM/YYYY)', 'Anniversary (DD/MM/YYYY)', 'Email'],
+      ['Rtr. John Doe', 'President', 'bod', 'working', '15/08/1998', '', 'john.doe@email.com'],
+      ['Rtr. Jane Smith', 'Secretary', 'core', 'student', '22/12/2000', '20/03/2023', 'jane.smith@email.com'],
     ])
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Members')
@@ -140,7 +145,7 @@ function ImportModal({ onClose, onImport }) {
                 <div>
                   <p className="font-semibold">{preview.parsed.length} members parsed</p>
                   <p className="text-xs text-rotary-slate dark:text-white/40 mt-0.5">
-                    Name ✓ {preview.cols.roleCol ? '· Role ✓' : ''} {preview.cols.bdayCol ? '· Birthday ✓' : ''} {preview.cols.annCol ? '· Anniversary ✓' : ''}
+                    Name ✓ {preview.cols.roleCol ? '· Role ✓' : ''} {preview.cols.bdayCol ? '· Birthday ✓' : ''} {preview.cols.annCol ? '· Anniversary ✓' : ''} {preview.cols.emailCol ? '· Email ✓' : ''}
                   </p>
                 </div>
                 <button onClick={() => setPreview(null)} className="text-xs text-rotary-blue hover:underline">Re-upload</button>
@@ -154,6 +159,7 @@ function ImportModal({ onClose, onImport }) {
                         <th className="text-left px-4 py-2.5 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Role</th>
                         <th className="text-left px-4 py-2.5 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Birthday</th>
                         <th className="text-left px-4 py-2.5 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Anniversary</th>
+                        <th className="text-left px-4 py-2.5 text-xs uppercase tracking-wider text-rotary-slate dark:text-white/40 font-semibold">Email</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -163,6 +169,7 @@ function ImportModal({ onClose, onImport }) {
                           <td className="px-4 py-2.5 text-xs text-rotary-slate dark:text-white/50">{r.role || '—'}</td>
                           <td className="px-4 py-2.5 text-xs text-rotary-slate dark:text-white/50">{r.birthday ? new Date(r.birthday + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
                           <td className="px-4 py-2.5 text-xs text-rotary-slate dark:text-white/50">{r.anniversary ? new Date(r.anniversary + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-rotary-slate dark:text-white/50">{r.email || '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -192,12 +199,12 @@ export default function OurTeam({ isAdmin, onBack }) {
   const [filterTeam, setFilterTeam] = useState('All')
   const [deleteLeader, setDeleteLeader] = useState(null)
   const [form, setForm] = useState({
-    name: '', role: '', category: 'bod', image: '', linkedin: '',
-    memberType: 'student', birthday: '', anniversary: '', notes: ''
+    name: '', role: '', role2: '', category: 'bod', image: '', linkedin: '', email: '',
+    memberType: 'student', birthday: '', anniversary: '', notes: '', avenue: ''
   })
 
   const resetForm = () => {
-    setForm({ name: '', role: '', category: 'bod', image: '', linkedin: '', memberType: 'student', birthday: '', anniversary: '', notes: '' })
+    setForm({ name: '', role: '', role2: '', category: 'bod', image: '', linkedin: '', email: '', memberType: 'student', birthday: '', anniversary: '', notes: '', avenue: '' })
     setEditingId(null)
     setShowForm(false)
   }
@@ -213,13 +220,16 @@ export default function OurTeam({ isAdmin, onBack }) {
     setForm({
       name: leader.name || '',
       role: leader.role || '',
+      role2: leader.role2 || '',
       category: leader.category || leader.team || 'member',
       image: leader.image || '',
       linkedin: leader.linkedin || '',
+      email: leader.email || '',
       memberType: leader.memberType || 'student',
       birthday: leader.birthday || '',
       anniversary: leader.anniversary || '',
-      notes: leader.notes || ''
+      notes: leader.notes || '',
+      avenue: leader.avenue || ''
     })
     setEditingId(leader.id)
     setShowForm(true)
@@ -311,6 +321,30 @@ export default function OurTeam({ isAdmin, onBack }) {
                   />
                 </div>
                 <div>
+                  <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">Position 2 (dual role, optional)</label>
+                  <input
+                    className={inputClass}
+                    placeholder="e.g. Membership Director"
+                    value={form.role2}
+                    onChange={e => setForm(f => ({ ...f, role2: e.target.value }))}
+                  />
+                </div>
+                {(form.role.toLowerCase().includes('director') || form.role2.toLowerCase().includes('director')) && (
+                  <div>
+                    <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">Avenue</label>
+                    <select
+                      className={inputClass}
+                      value={form.avenue}
+                      onChange={e => setForm(f => ({ ...f, avenue: e.target.value }))}
+                    >
+                      <option value="">Select avenue…</option>
+                      {DIRECTOR_AVENUES.map(a => (
+                        <option key={a} value={a}>{a}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div>
                   <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">Category</label>
                   <select
                     className={inputClass}
@@ -368,6 +402,16 @@ export default function OurTeam({ isAdmin, onBack }) {
                     placeholder="https://linkedin.com/in/..."
                     value={form.linkedin}
                     onChange={e => setForm(f => ({ ...f, linkedin: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-rotary-slate dark:text-white/50 mb-1.5 uppercase tracking-wider">Email</label>
+                  <input
+                    type="email"
+                    className={inputClass}
+                    placeholder="member@email.com"
+                    value={form.email}
+                    onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
                   />
                 </div>
                 <div>

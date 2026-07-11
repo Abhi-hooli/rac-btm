@@ -83,7 +83,7 @@ function getEventsForDate(date, membersInfo) {
     }
     if (mem.anniversary) {
       const p = parseToMonthDay(mem.anniversary)
-      if (p && p.month === m && p.day === d) events.push({ id: `a-${mem.id}`, title: mem.name, category: 'anniversary', desc: 'Member Anniversary 💍', type: 'anniversary' })
+      if (p && p.month === m && p.day === d) events.push({ id: `a-${mem.id}`, title: mem.name, category: 'anniversary', desc: 'Wedding Anniversary 💍', type: 'anniversary' })
     }
   })
   return events
@@ -439,12 +439,17 @@ export default function CalendarPage({ onBack, isAdmin }) {
               )}
             </div>
 
-            {/* Members list */}
-            {(loading || membersInfo.length > 0) && (
+            {/* Members list — birthdays/anniversaries feed the public calendar,
+                but the roster itself (name + date-of-birth) is admin-only,
+                not something every site visitor should be able to browse. */}
+            {isAdmin && (loading || membersInfo.length > 0) && (
               <div className="bg-white dark:bg-rotary-navy-light rounded-xl border border-gray-100 dark:border-white/5 p-5">
                 <h3 className="font-display font-semibold text-sm mb-4">
                   Members {!loading && `(${membersInfo.length})`}
                 </h3>
+                <p className="text-xs text-rotary-slate dark:text-white/40 mb-3">
+                  Admin-only — manage the birthdays &amp; anniversaries that appear on the calendar above.
+                </p>
                 <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
                   {loading ? (
                     [...Array(4)].map((_, i) => (
@@ -466,11 +471,9 @@ export default function CalendarPage({ onBack, isAdmin }) {
                             {m.anniversary && <span className="text-[10px] text-cyan-500">💍 {new Date(m.anniversary + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
                           </div>
                         </div>
-                        {isAdmin && (
-                          <button onClick={() => removeMember(m.id)} className="w-6 h-6 rounded text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center justify-center transition-colors shrink-0">
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                          </button>
-                        )}
+                        <button onClick={() => removeMember(m.id)} className="w-6 h-6 rounded text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center justify-center transition-colors shrink-0">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
                       </div>
                     ))
                   )}
